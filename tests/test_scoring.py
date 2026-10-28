@@ -77,6 +77,19 @@ def test_recommendation_never_overstates_partial_data():
     assert r["data_required_before_investment_decision"] and all("drivers" in x for x in r["ranking"])
 
 
+def test_capex_feasibility_ranges_and_labels():
+    x = run_tool("capex_feasibility", {"code": "PWM"})
+    c = x["capex_estimate_usd_millions"]
+    assert 0 < c["low"] < c["central"] < c["high"]
+    p = x["simple_payback_years_at_full_use"]
+    assert p["optimistic (low cost, high margin)"] < p["central"] < p["pessimistic (high cost, low margin)"]
+    assert x["overall_confidence"].startswith("Low")
+    assert any("not final" in d["latest_status"].lower() for d in x["estimate_drift_in_benchmarks"])
+    assert "Not the total cost" in x["federal_aip_context"]["what_this_is"]
+    y = run_tool("capex_feasibility", {"code": "PWM", "added_annual_pax": 1_000_000})
+    assert y["scenario"]["added_annual_passengers"] == 1_000_000
+
+
 def test_unknown_tool_does_not_crash():
     assert "error" in run_tool("nope", {})
 

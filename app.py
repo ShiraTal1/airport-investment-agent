@@ -16,6 +16,7 @@ from agent.llm_agent import AirportAgent
 st.set_page_config(page_title="Airport Investment Intelligence", page_icon="✈️", layout="wide")
 
 EXAMPLES = [
+    "Which US airports are the most promising terminal investment opportunities, and what would it cost?",
     "Which airports in New England are strong candidates for terminal expansion?",
     "Compare LA and Santa Ana airport congestion levels.",
     "What is the percentage of long haul flights out of Anchorage airport?",
@@ -35,8 +36,9 @@ def get_secret(name: str) -> str | None:
 # ---------------------------------------------------------------- sidebar
 with st.sidebar:
     st.header("✈️ Airport Investment Agent")
-    st.caption("Finds US airports where demand is outgrowing capacity, using public BTS/FAA data, "
-               "a deterministic scoring model, and an LLM that explains the results.")
+    st.caption("Helps analysts identify promising US airport investment opportunities: where demand is "
+               "outgrowing capacity, what an expansion might cost and earn, and what to check next. Public "
+               "BTS/FAA data, a deterministic scoring model, and an LLM that explains the results.")
     api_key = get_secret("ANTHROPIC_API_KEY") or st.text_input("Anthropic API key", type="password")
 
     st.subheader("Score weights")
@@ -166,6 +168,7 @@ with tab_method:
     st.table(pd.DataFrame(meth["submetrics"]).T)
     st.markdown(f"**Potential tiers:** {meth['potential_tiers']}")
     st.markdown(f"**Recommendation rule:** {meth['recommendation_rule']}")
+    st.markdown(f"**Renovation cost and return (screening level):** {meth['feasibility_method']}")
     st.markdown(f"**Missing data:** {meth['missing_data_rule']}")
     st.markdown("**Key assumptions:**")
     for a in meth["key_assumptions"]:

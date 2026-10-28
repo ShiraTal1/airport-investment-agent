@@ -15,3 +15,4 @@ Each question lists the tool(s) the agent should call and what a good answer mus
 | 8 | "Any delays at SFO right now?" | live_faa_status([SFO]) | Use live API; report time of update; say if no events |
 | 9 | "What are the 5 most congested large airports?" | rank_by_metric(congestion_score, hub_sizes=[Large hub]) | Ranked list with values; note congestion ≠ attractiveness |
 | 10 | "How many passengers fly DEN–LAS?" | route_lookup(DEN, LAS) | Both directions; segment (not O&D) caveat |
+| 11 | "Is a terminal expansion at PWM worth it? What would it cost?" | capex_feasibility(PWM) | Ranges only; Low confidence; estimate-vs-final labels; AIP = grants not cost; ACRP 120 scope caveat |

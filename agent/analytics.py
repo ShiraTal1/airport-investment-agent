@@ -577,6 +577,11 @@ def methodology(weights: dict | None = None) -> dict:
                                "confidence -> Investigate further; Medium otherwise -> Monitor; Low -> Deprioritize. "
                                "Airside-constrained airports get 'check runway/airspace capacity first'.",
         "data_required_before_investment_decision": DATA_REQUIRED_BEFORE_INVESTMENT,
+        "feasibility_method": "capex_feasibility: added capacity = 10 years of growth (CAGR bounded 1%-5%); "
+                              "area = 0.05/0.07/0.09 sq ft per annual passenger; cost = area x $/sq ft from 4 "
+                              "recent US terminals (min/median/max); added income = added enplanements x FAA CATS "
+                              "revenue per enplanement x 25%/37%/45% margin; payback = cost / income. "
+                              "Screening only, Low confidence.",
         "missing_data_rule": "Within a component, sub-metric weights are re-normalized over available data. "
                              "A component with no data is set to a neutral 50. Confidence is lowered either way.",
         "data_sources": md.get("sources", []),
@@ -691,3 +696,134 @@ def route_lookup(origin: str, dest: str) -> dict:
     out["notes"] = ["BTS T-100 segment data: passengers on that non-stop flight leg, including connecting "
                     "passengers; not origin-destination demand."]
     return out
+
+
+# ---------------------------------------------------------------------------
+# Capex and return feasibility (screening level)
+# ---------------------------------------------------------------------------
+SQFT_PER_ANNUAL_PAX = (0.05, 0.07, 0.09)   # low / central / high, from benchmark terminals (see DESIGN.md)
+MARGIN_RANGE = (0.25, 0.37, 0.45)          # incremental operating margin; central = FAA CATS FY2025 system margin
+GROWTH_FLOOR, GROWTH_CAP = 0.01, 0.05       # bounds on the growth rate used to size the expansion
+
+SOURCE_CONFIDENCE = [
+    {"input": "Passenger growth (sizing)", "source": "BTS T-100 2023-2025", "nature": "Actual traffic; "
+     "extrapolated forward", "confidence": "Medium"},
+    {"input": "Terminal area per annual passenger", "source": "4 recent US terminal projects", "nature":
+     "Derived from project size vs airport traffic", "confidence": "Low"},
+    {"input": "Construction cost per sq ft", "source": "Same 4 projects (BUR, MCI, PIT, FLL)", "nature":
+     "1 reported at completion (BUR); 3 are budgets or latest estimates, not final costs", "confidence": "Low"},
+    {"input": "Revenue per enplanement", "source": "FAA CATS Form 127, FY2025", "nature": "Actual reported "
+     "revenue, aggregated by hub tier (not airport-specific)", "confidence": "Medium"},
+    {"input": "Incremental operating margin", "source": "FAA CATS FY2025 system average (37%)", "nature":
+     "Average applied to incremental passengers; real incremental margin may differ", "confidence": "Low"},
+    {"input": "Federal AIP grants FY2021-25", "source": "FAA AIP grant histories", "nature": "Grant amounts "
+     "awarded (federal share at award), NOT total project cost and not final project cost", "confidence":
+     "High for what it is"},
+    {"input": "ACRP Report 120 (2014)", "source": "TRB cost-estimating guidebook + model", "nature": "Method "
+     "and uncertainty guidance; its cost database covers airfield/ARFF/SRE projects in FY2014$, not terminals, "
+     "so it is not used for terminal unit costs", "confidence": "n/a for terminals"},
+]
+
+
+def _rev_per_enplanement(hub_size: str) -> tuple[float, str]:
+    fb = data.finance_benchmarks()
+    m = metrics_table()
+    total_rev = fb["fy2025_total_operating_revenue_usd"]
+    lh_share = fb["large_hub_share_of_operating_revenue"]
+    lh_enp = m.loc[m.hub_size == "Large hub", "pax_enplaned"].sum()
+    other_enp = m.loc[m.hub_size != "Large hub", "pax_enplaned"].sum()
+    if hub_size == "Large hub":
+        return total_rev * lh_share / lh_enp, "Large-hub average (FAA CATS FY2025 / BTS 2025)"
+    return total_rev * (1 - lh_share) / other_enp, "Average of non-large-hub airports (FAA CATS FY2025 / BTS 2025)"
+
+
+def capex_feasibility(code: str, added_annual_pax: float | None = None, horizon_years: int = 10) -> dict:
+    """Screening-level estimate of terminal expansion cost and the operating income it could add.
+    Ranges, not point answers. Every input is labeled with its source and whether it is an estimate."""
+    code = code.upper()
+    m = metrics_table()
+    if code not in m.index:
+        return {"error": f"{code} not found"}
+    r = m.loc[code]
+    s = score_table().loc[code]
+
+    # 1. Size the expansion
+    g_raw = r["pax_cagr_2023_2025"]
+    g = float(np.clip(0 if pd.isna(g_raw) else g_raw, GROWTH_FLOOR, GROWTH_CAP))
+    if added_annual_pax is None:
+        added = r["pax_total"] * ((1 + g) ** horizon_years - 1)
+        sizing = (f"Capacity for {horizon_years} years of growth at {g:.1%}/yr (2023-25 CAGR "
+                  f"{'n/a' if pd.isna(g_raw) else f'{g_raw:.1%}'}, bounded to 1%-5%)")
+    else:
+        added = float(added_annual_pax)
+        sizing = "User-specified added annual passengers"
+    area = [added * k for k in SQFT_PER_ANNUAL_PAX]
+
+    # 2. Cost from benchmark $/sq ft
+    b = data.cost_benchmarks().copy()
+    b["usd_per_sqft"] = b["cost_usd"] / b["terminal_sqft"]
+    lo, hi, mid = b["usd_per_sqft"].min(), b["usd_per_sqft"].max(), b["usd_per_sqft"].median()
+    cost = {"low": area[0] * lo, "central": area[1] * mid, "high": area[2] * hi}
+
+    # 3. Revenue and operating income at full use of the new capacity
+    rpe, rpe_basis = _rev_per_enplanement(r["hub_size"])
+    added_enp = added / 2
+    revenue = added_enp * rpe
+    op_inc = {k: revenue * v for k, v in zip(("low", "central", "high"), MARGIN_RANGE)}
+
+    def payback(c, oi):
+        return round(c / oi, 1) if oi else None
+
+    # 4. Estimate drift seen in the benchmark projects
+    drift = b.dropna(subset=["first_public_estimate_usd"]).copy()
+    drift["growth_pct"] = (drift["cost_usd"] / drift["first_public_estimate_usd"] - 1) * 100
+
+    aip = data.aip_grants()
+    a = aip[aip["airport"] == code]
+    aip_ctx = None
+    if not a.empty:
+        a = a.iloc[0]
+        aip_ctx = {"aip_total_fy2021_2025_usd": int(a["aip_total_fy21_25"]),
+                   "aip_terminal_related_fy2021_2025_usd": int(a["aip_terminal_fy21_25"]),
+                   "terminal_grants_count": int(a["n_terminal_grants"]),
+                   "largest_terminal_items": a["top_terminal_projects"],
+                   "what_this_is": "Federal grant amounts awarded (federal share at award date). Not the total "
+                                   "cost of those projects and not final costs. Large terminal programs are mostly "
+                                   "funded by bonds, passenger facility charges and airline rates, so AIP shows "
+                                   "only part of the picture."}
+
+    M = 1e6
+    return {
+        "airport": code, "name": r["name"], "hub_size": r["hub_size"],
+        "opportunity_score": s["opportunity_score"], "potential": s["potential"],
+        "recommendation": s["recommendation"], "flags": s["flags"],
+        "scenario": {"sizing_basis": sizing, "added_annual_passengers": int(added),
+                     "added_annual_enplanements": int(added_enp),
+                     "terminal_area_sqft_range": [int(x) for x in area]},
+        "capex_estimate_usd_millions": {k: round(v / M) for k, v in cost.items()},
+        "capex_basis": f"Area x ${lo:,.0f}-${hi:,.0f} per sq ft (median ${mid:,.0f}) from {len(b)} recent US terminals",
+        "revenue_per_enplanement_usd": round(rpe, 2), "revenue_basis": rpe_basis,
+        "added_operating_revenue_usd_millions_per_year": round(revenue / M, 1),
+        "added_operating_income_usd_millions_per_year": {k: round(v / M, 1) for k, v in op_inc.items()},
+        "simple_payback_years_at_full_use": {
+            "optimistic (low cost, high margin)": payback(cost["low"], op_inc["high"]),
+            "central": payback(cost["central"], op_inc["central"]),
+            "pessimistic (high cost, low margin)": payback(cost["high"], op_inc["low"])},
+        "estimate_drift_in_benchmarks": [
+            {"airport": d.airport, "first_estimate_usd_m": round(d.first_public_estimate_usd / M),
+             "first_estimate_year": int(d.first_estimate_year), "latest_usd_m": round(d.cost_usd / M),
+             "latest_status": d.cost_status, "change_pct": round(d.growth_pct)} for d in drift.itertuples()],
+        "federal_aip_context": aip_ctx,
+        "source_confidence": SOURCE_CONFIDENCE,
+        "overall_confidence": "Low (screening only, roughly order-of-magnitude). Not an investment-grade estimate.",
+        "caveats": [
+            "Payback assumes the new capacity is fully used; during a ramp-up over the sizing horizon, "
+            "real payback is longer.",
+            "Costs are terminal building only (no airfield, roadway, parking or financing costs) in current dollars.",
+            "Airport revenue is regulated: much aeronautical revenue is set by airline agreements on a cost-recovery "
+            "basis, so an investor's return depends on the deal structure (P3, concession, lease), not only on "
+            "airport operating income.",
+            "Early-stage terminal estimates in the benchmark set rose 55%-171% before completion or latest update; "
+            "treat any early figure as likely to grow.",
+        ],
+    }
