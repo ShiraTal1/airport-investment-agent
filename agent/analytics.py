@@ -39,10 +39,12 @@ SUBMETRICS = {
     "load_factor":            ("capacity_pressure", 0.5, True),
     "high_lf_route_share":    ("capacity_pressure", 0.3, True),
     "demand_minus_supply_growth": ("capacity_pressure", 0.2, True),
+    # Congestion = strain that a TERMINAL investment can relieve. NAS (airspace/runway) delay is deliberately
+    # NOT scored here: terminals do not fix it. It is used only for the airside-constrained flag.
+    # Busiest-hour ops gets the largest weight because terminal sizing is driven by peak-hour demand.
     "dep_delay15_rate":       ("congestion", 0.3, True),
     "avg_taxi_out_min":       ("congestion", 0.3, True),
-    "peak_hour_ops":          ("congestion", 0.2, True),
-    "nas_delay_min_per_arrival": ("congestion", 0.2, True),
+    "peak_hour_ops":          ("congestion", 0.4, True),
     "log_total_pax":          ("scale", 1.0, True),
 }
 

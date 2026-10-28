@@ -80,7 +80,7 @@ small CSVs in `data/` are what the app reads. Live FAA status is fetched at ques
 |---|---|---|
 | **Demand growth (35%)** | Passenger CAGR 2023→2025 (40%), Jan-Jul 2026 vs 2025 growth (40%), 2025 vs 2019 recovery (20%) | Growth is what fills new capacity; mixes medium-term trend and current momentum |
 | **Capacity pressure (30%)** | Load factor (50%), share of seats on routes with ≥85% load factor (30%), passenger growth minus seat growth (20%) | Full planes + demand outpacing supply = existing capacity is binding |
-| **Congestion (20%)** | % departures delayed 15+ min (30%), avg taxi-out (30%), busiest-hour ops (20%), NAS delay minutes per arrival (20%) | Operational strain on the facility |
+| **Congestion (20%)** | % departures delayed 15+ min (30%), avg taxi-out (30%), busiest-hour ops (40%) | Strain that a terminal investment can relieve; peak hour drives terminal sizing. NAS delay is **not** scored (see below) |
 | **Scale (15%)** | Total passengers (log) | Larger base = larger absolute return on a given % improvement |
 
 **Explicit formula:**
@@ -92,7 +92,7 @@ G (demand growth)     = 0.4·P(CAGR 2023-25) + 0.4·P(growth Jan-Jul 2026 vs 202
 C (capacity pressure) = 0.5·P(load factor) + 0.3·P(share of seats on routes with LF ≥ 85%)
                         + 0.2·P(passenger growth − seat growth)
 K (congestion)        = 0.3·P(% departures delayed 15+ min) + 0.3·P(avg taxi-out)
-                        + 0.2·P(busiest-hour ops) + 0.2·P(NAS delay min per arrival)
+                        + 0.4·P(busiest-hour ops)
 S (scale)             = P(log10 total passengers)
 
 P(x) = percentile of x among US airports with ≥ 1M enplaned passengers (0-100)
@@ -105,6 +105,11 @@ region) keeps scores comparable: a "70" in New England means the same as a "70" 
 **Missing data:** within a component, weights are re-normalized over available sub-metrics; a component with
 no data at all (e.g. congestion for airports with few on-time-reporting flights) is set to a **neutral 50**, so
 missing data neither helps nor hurts the rank, and the **confidence** label drops (High / Medium / Low).
+
+**Why NAS delay is not in the score.** NAS delay measures airspace and runway congestion, which a terminal
+investment does not relieve. Scoring it would reward airports for a problem the investment cannot fix, while
+the airside-constrained flag warns about the same problem. So NAS delay is used only in that flag (and in the
+descriptive congestion index used when comparing airports).
 
 **Flags (rule-based):**
 - *Airside-constrained*: NAS delay and taxi-out both in the top quartile → growth may be capped by
@@ -123,7 +128,7 @@ Weights are adjustable (sidebar sliders or by asking the agent, e.g. "weight gro
 load factor were 90%?"*) in the chat or in the **What-if** tab. The airport is re-scored with the same formula
 while all other airports and the peer group stay unchanged, and the tool shows before vs after: score,
 components, potential, confidence, recommendation, flags and national rank. Example: PWM's load factor
-82.4% → 90% raises the score only 56.6 → 57.9, because PWM is already at the 91st percentile on that metric.
+82.4% → 90% raises the score only 54.8 → 56.1, because PWM is already at the 91st percentile on that metric.
 
 **From score to recommendation.** The score measures *initial potential*, not proven profitability, so it is
 translated into a decision-oriented label, again with fixed rules:
@@ -137,7 +142,7 @@ translated into a decision-oriented label, again with fixed rules:
 A high score on partial data never becomes an automatic "go". Airside-constrained airports also get
 *"check runway/airspace capacity first"*. Each airport carries a deterministic **drivers** line (components
 above the 70th / below the 40th percentile), so the explanation is grounded in the actual metrics:
-e.g. *BOS: strengths scale (86), capacity pressure (78), congestion (76); flagged airside-constrained*.
+e.g. *BOS: strengths scale (86), capacity pressure (78), congestion (77); flagged airside-constrained*.
 
 **Data required before an investment decision** (shown after every ranking; not available publicly):
 
@@ -163,7 +168,7 @@ audit the reasoning.
 ## 5b. What the model says about the sample questions (deterministic outputs)
 | Question | Key result | Why it is interesting |
 |---|---|---|
-| New England candidates | BOS 67.2, BGR 61.7 (Medium conf.), PWM 56.6, BTV 53.6, BDL 46.3, PVD 43.6 | BOS leads on pressure/congestion but is flagged airside-constrained; PWM is a mid-size airport with 82% load factor and 7.5%/yr growth |
+| New England candidates | BOS 67.3, BGR 59.8 (Medium conf.), PWM 54.8, BTV 50.2, BDL 46.6, PVD 43.7 | BOS leads on pressure/congestion but is flagged airside-constrained; PWM is a mid-size airport with 82% load factor and 7.5%/yr growth |
 | LAX vs SNA congestion | Congestion index 65.5 vs 47.0; delay rate ~equal (24.5% vs 25.1%) but LAX has 4x busiest-hour ops (91 vs 22) and longer taxi-out (18.5 vs 15.9 min) | Same delay rate, very different physical congestion; SNA's limits are largely regulatory (labeled as general knowledge) |
 | ANC long-haul share | 4.9% of passenger departures ≥3,000 mi; 32.4% including cargo; 54% of departures are cargo-only | The answer depends on definitions; the agent shows the sensitivity instead of one number |
 | SFO unmet demand | ~0.95M spilled passengers/yr (0.5-1.4M) ≈ ~6,000 flights/yr (~16 per day), low confidence; load factor 82% (90th pct), NAS delay 14.2 min/arrival (highest among peers), flat seat growth | Demand exists but airside limits cap supply, so terminal capacity alone may not unlock it |
@@ -180,7 +185,10 @@ audit the reasoning.
    is reduced but not removed. The ETL script supports any number of months.
 5. **LLM flexibility vs. control.** The LLM can only act through 11 typed tools, which limits creativity but
    prevents hallucinated numbers and keeps answers consistent between runs.
-6. **Simple, explainable weights vs. fitted model.** Weights are expert judgment, not learned (no labeled
+6. **Terminal vs. airside congestion.** Airspace/runway (NAS) delay is excluded from the score and used only as a
+   flag, so the score reflects congestion a terminal can relieve. Cost: airports whose main problem is airside
+   rank slightly lower; the flag keeps that problem visible.
+7. **Simple, explainable weights vs. fitted model.** Weights are expert judgment, not learned (no labeled
    "successful expansion" data). With the firm's past deal outcomes, weights could be calibrated.
 
 ## 7. Assumptions & limitations
