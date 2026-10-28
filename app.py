@@ -182,13 +182,16 @@ with tab_whatif:
         cur_disp = round(float(cur) * div, 2)
         step = 1000.0 if k == "pax_total" else (0.5 if unit in ("%", "min") else 1.0)
         val = cols[i % 2].number_input(f"{label} ({unit})", value=float(cur_disp), step=step, key=f"wi_{code}_{k}")
-        if abs(val - cur_disp) > 1e-9:
+        # only count a field as changed if it differs by more than the 2-decimal display rounding
+        if abs(val - cur_disp) > 0.006:
             changes[k] = val
     if not changes:
         st.info("Change any value above to see the effect.")
     else:
         res = A.what_if(code, changes, st.session_state.get("ui_weights"))
         b, a = res["before"], res["after"]
+        st.markdown("**Changed:** " + "; ".join(
+            f"{c['label']}: {c['from']} → {c['to']:g} {c['unit']}" for c in res["changes_applied"]))
         c1, c2, c3 = st.columns(3)
         c1.metric("Opportunity score", a["opportunity_score"], res["score_change"])
         c2.metric("National rank (of 105 peers)", a["national_rank_among_peers"],
