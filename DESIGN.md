@@ -19,7 +19,7 @@ ranks *capacity need*, not project IRR.
 | **Measure** | Public BTS/FAA data turned into KPIs for demand, activity and capacity pressure (Section 3) |
 | **Rank** | A pre-defined, deterministic formula; same data → same ranking (Section 4) |
 | **Explain** | Why an airport ranks high, which data supports it, and what is still unknown (Section 5) |
-| **Validate** | Automated checks against the source data now; analysts and real financials in a pilot (Section 9) |
+| **Validate** | Automated checks of the data against its source and against published airport totals (Section 3b); every answer shows the exact calculations behind it, so it can be checked in seconds (Section 5) |
 
 The goal is not to build an agent for its own sake, but to make an investment screening decision faster,
 more consistent and easier to audit.
@@ -27,19 +27,28 @@ more consistent and easier to audit.
 ## 2. Architecture
 
 ```
- Analyst ──► Streamlit chat (text / optional voice)
+ Analyst asks a question in the Streamlit chat
                  │
                  ▼
-        Claude (tool-use loop)  ── plans, resolves names, explains, handles follow-ups
-                 │  calls tools (JSON)
-                 ▼
-        Deterministic tools (Python)  ── rank / rank_by_metric / profile / compare / what_if / route_mix / route_lookup / demand_pressure / live status
+ (1) Claude (LLM) understands the question and chooses which tool to call
                  │
-        ┌────────┴──────────────┐
-        ▼                       ▼
-  Snapshot data (CSV)     FAA NAS Status API (live)
-  built by etl/ from BTS
+                 ▼
+ (2) Tools receive the request and pass it to the scoring engine
+                 │
+                 ▼
+ (3) Scoring engine (Python, no LLM) computes metrics → percentiles →
+     component scores → Opportunity Score → tier, flags, recommendation
+                 │  reads
+                 ▼
+ (4) Data: BTS snapshot (CSV files) + live FAA NAS Status API
+                 │
+                 ▼
+ (5) The numbers go back to Claude, which writes the answer and explains it
+     (it can only use the numbers it received)
 ```
+
+**Where the score is calculated:** only in step (3), in `agent/analytics.py`. The LLM never calculates or
+changes a score; it only chooses what to ask for and explains the result.
 
 | Layer | File | Responsibility |
 |---|---|---|
@@ -80,7 +89,7 @@ small CSVs in `data/` are what the app reads. Live FAA status is fetched at ques
 |---|---|---|
 | **Demand growth (35%)** | Passenger CAGR 2023→2025 (40%), Jan-Jul 2026 vs 2025 growth (40%), 2025 vs 2019 recovery (20%) | Growth is what fills new capacity; mixes medium-term trend and current momentum |
 | **Capacity pressure (30%)** | Load factor (50%), share of seats on routes with ≥85% load factor (30%), passenger growth minus seat growth (20%) | Full planes + demand outpacing supply = existing capacity is binding |
-| **Congestion (20%)** | % departures delayed 15+ min (30%), avg taxi-out (30%), busiest-hour ops (40%) | Strain that a terminal investment can relieve; peak hour drives terminal sizing. NAS delay is **not** scored (see below) |
+| **Congestion (20%)** | % departures delayed 15+ min (30%), avg taxi-out (30%), busiest-hour ops (40%) | Strain that a terminal investment can relieve; peak hour drives terminal sizing. NAS delay is **not** scored (see Flags) |
 | **Scale (15%)** | Total passengers (log) | Larger base = larger absolute return on a given % improvement |
 
 **Explicit formula:**
@@ -106,21 +115,14 @@ region) keeps scores comparable: a "70" in New England means the same as a "70" 
 no data at all (e.g. congestion for airports with few on-time-reporting flights) is set to a **neutral 50**, so
 missing data neither helps nor hurts the rank, and the **confidence** label drops (High / Medium / Low).
 
-**Why NAS delay is not in the score.** NAS delay measures airspace and runway congestion, which a terminal
-investment does not relieve. Scoring it would reward airports for a problem the investment cannot fix, while
-the airside-constrained flag warns about the same problem. So NAS delay is used only in that flag (and in the
-descriptive congestion index used when comparing airports).
-
 **Flags (rule-based):**
+
 - *Airside-constrained*: NAS delay and taxi-out both in the top quartile → growth may be capped by
-  runways/airspace, so terminal capacity alone may not unlock it.
+  runways/airspace, so terminal capacity alone may not unlock it. This is the **only** place NAS delay is used:
+  NAS delay measures airspace and runway congestion, which a terminal investment does not relieve, so it
+  warns about the problem instead of raising the score.
 - *Cargo-heavy*: ≥30% of departures are cargo-only (e.g. ANC) → passenger metrics understate activity.
 - *Below peer size*, *Not recovered vs 2019*, *Limited delay data*.
-
-**Unmet demand** (not directly observable) is reported as proxies plus a transparent heuristic: route-level
-"spill" rises from 0% at ≤80% annual load factor to 15% at ≥95%, summed over routes, shown with a ±50% range
-and labeled low confidence. Spilled passengers are converted to **flights** using each route's average
-passengers per flight (the extra same-size flights airlines would need).
 
 Weights are adjustable (sidebar sliders or by asking the agent, e.g. "weight growth twice as much").
 
@@ -139,10 +141,19 @@ translated into a decision-oriented label, again with fixed rules:
 | **Medium potential** | 50-65 | High confidence → *Investigate further*; otherwise → *Monitor* |
 | **Low potential** | < 50 | *Deprioritize* |
 
-A high score on partial data never becomes an automatic "go". Airside-constrained airports also get
-*"check runway/airspace capacity first"*. Each airport carries a deterministic **drivers** line (components
-above the 70th / below the 40th percentile), so the explanation is grounded in the actual metrics:
-e.g. *BOS: strengths scale (86), capacity pressure (78), congestion (77); flagged airside-constrained*.
+A high score on partial data never becomes an automatic "go".
+
+**Text notes shown next to every score.** Besides the number, each airport gets three short notes, all
+produced by fixed rules (not written by the LLM):
+
+1. **Recommendation:** from the table above, e.g. *"Prioritize for due diligence"*.
+2. **Warning:** if the airport has the airside-constrained flag, the recommendation adds *"check
+   runway/airspace capacity first"*, because a new terminal will not help if the runways are the bottleneck.
+3. **Strengths and weaknesses:** every component score of 70 or more is listed as a strength and every
+   component score below 40 as a weakness, so the explanation comes directly from the numbers.
+
+Example, Boston (BOS), score 67.3: *Prioritize for due diligence, check runway/airspace capacity first.
+Strengths: scale 86, capacity pressure 78, congestion 77. Flag: airside-constrained.*
 
 **Data required before an investment decision** (shown after every ranking; not available publicly):
 
@@ -165,14 +176,6 @@ e.g. *BOS: strengths scale (86), capacity pressure (78), congestion (77); flagge
 Every answer shows a **"How I got this"** panel with the exact tool calls and raw outputs, so an analyst can
 audit the reasoning.
 
-## 5b. What the model says about the sample questions (deterministic outputs)
-| Question | Key result | Why it is interesting |
-|---|---|---|
-| New England candidates | BOS 67.3, BGR 59.8 (Medium conf.), PWM 54.8, BTV 50.2, BDL 46.6, PVD 43.7 | BOS leads on pressure/congestion but is flagged airside-constrained; PWM is a mid-size airport with 82% load factor and 7.5%/yr growth |
-| LAX vs SNA congestion | Congestion index 65.5 vs 47.0; delay rate ~equal (24.5% vs 25.1%) but LAX has 4x busiest-hour ops (91 vs 22) and longer taxi-out (18.5 vs 15.9 min) | Same delay rate, very different physical congestion; SNA's limits are largely regulatory (labeled as general knowledge) |
-| ANC long-haul share | 4.9% of passenger departures ≥3,000 mi; 32.4% including cargo; 54% of departures are cargo-only | The answer depends on definitions; the agent shows the sensitivity instead of one number |
-| SFO unmet demand | ~0.95M spilled passengers/yr (0.5-1.4M) ≈ ~6,000 flights/yr (~16 per day), low confidence; load factor 82% (90th pct), NAS delay 14.2 min/arrival (highest among peers), flat seat growth | Demand exists but airside limits cap supply, so terminal capacity alone may not unlock it |
-
 ## 6. Key tradeoffs
 1. **Snapshot vs. live data.** Historical data is pre-aggregated into small CSVs (fast, reproducible,
    testable, works offline; BTS downloads take minutes). Live FAA status is fetched per question. Cost: the
@@ -185,34 +188,5 @@ audit the reasoning.
    is reduced but not removed. The ETL script supports any number of months.
 5. **LLM flexibility vs. control.** The LLM can only act through 11 typed tools, which limits creativity but
    prevents hallucinated numbers and keeps answers consistent between runs.
-6. **Terminal vs. airside congestion.** Airspace/runway (NAS) delay is excluded from the score and used only as a
-   flag, so the score reflects congestion a terminal can relieve. Cost: airports whose main problem is airside
-   rank slightly lower; the flag keeps that problem visible.
-7. **Simple, explainable weights vs. fitted model.** Weights are expert judgment, not learned (no labeled
+6. **Simple, explainable weights vs. fitted model.** Weights are expert judgment, not learned (no labeled
    "successful expansion" data). With the firm's past deal outcomes, weights could be calibrated.
-
-## 7. Assumptions & limitations
-- Enplanements approximated by T-100 departing segment passengers (includes connections, like FAA counts).
-- Delay metrics cover only on-time reporting carriers (large US airlines + major regionals).
-- "Long-haul" defaults to ≥3,000 statute miles; the tool reports sensitivity at 2,000/2,500/3,000/4,000.
-- 2026 is partial (Jan-Jul); YTD growth compares like-for-like months.
-- No regulatory, environmental, community or funding constraints are modeled (the LLM may mention them as
-  labeled context).
-
-## 8. Success metrics for a pilot
-| Metric | What it checks | How it is measured |
-|---|---|---|
-| **Data accuracy** | Do the numbers match the source? | Spot-check tool outputs against BTS/FAA source tables; unit tests on every metric |
-| **Ranking consistency** | Does the same data always produce the same ranking? | Deterministic scoring + automated test (same input → identical ranking) |
-| **Analyst usefulness** | Can analysts understand the ranking and use it for the next step? | Analyst review of answers against the eval rubric; share of shortlisted airports that move to deep-dive; time saved per screening |
-
-These are deliberately stricter than "does the model give a convincing answer".
-
-## 9. With more time / path to production
-- Add FAA Terminal Area Forecast (official 20-year projections) and FAA ACAIS enplanements.
-- Add facility data (gates, terminal sq ft) from airport master plans → passengers per gate as a true
-  terminal-capacity metric.
-- Calibrate weights with the firm's analysts and historical deals; add backtesting (did high-score airports
-  in 2015 expand and grow?).
-- Scheduled refresh of the snapshot; caching and observability (log every tool call and answer).
-- Evaluation harness: `eval/questions.md` rubric run automatically with an LLM grader.
