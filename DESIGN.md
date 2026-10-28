@@ -1,0 +1,128 @@
+# Airport Investment Intelligence Agent — Design Note
+
+## 1. Problem framing
+The firm invests in airport modernization and wants to know **where added terminal/flight capacity will be
+used**. "Most profitable" is not directly measurable with public data (no construction costs, lease terms,
+concession revenue or financing). So I reframed the question into what *can* be measured:
+
+> **Where is passenger demand growing, and where is existing capacity already under pressure?**
+
+An airport with strong growth, full planes and congested operations is where new capacity is most likely to
+fill quickly, which is the main driver of returns on a capacity project. The agent is explicit that its score
+ranks *capacity need*, not project IRR.
+
+## 2. Architecture
+
+```
+ Analyst ──► Streamlit chat (text / optional voice)
+                 │
+                 ▼
+        Claude (tool-use loop)  ── plans, resolves names, explains, handles follow-ups
+                 │  calls tools (JSON)
+                 ▼
+        Deterministic tools (Python)  ── rank / profile / compare / route_mix / demand_pressure / live status
+                 │
+        ┌────────┴──────────────┐
+        ▼                       ▼
+  Snapshot data (CSV)     FAA NAS Status API (live)
+  built by etl/ from BTS
+```
+
+| Layer | File | Responsibility |
+|---|---|---|
+| Data | `etl/`, `agent/data.py` | Pull public BTS data, aggregate to small CSVs; live FAA client |
+| Analytics | `agent/analytics.py` | All metrics, percentiles, scores, flags, confidence. **No LLM.** |
+| Tools | `agent/tools.py` | JSON schemas the LLM can call; name resolution; error handling |
+| Agent | `agent/llm_agent.py` | System prompt with guardrails, tool loop, conversation memory |
+| UI | `app.py` | Chat + "How I got this" trace, no-LLM leaderboard, methodology, weight sliders |
+
+## 3. Data (all public)
+| Source | Used for |
+|---|---|
+| **BTS T-100 Segment, all carriers** (US + foreign, domestic + international), 2019, 2023-2025, Jan-Jul 2026 | Passengers, seats, departures, load factor, growth, route distances, cargo share |
+| **BTS Airline On-Time Performance** (reporting carriers), sample months Dec 2025 + Jun 2026 | Delay rate, taxi-out/in, NAS (airspace/airport) delay, busiest-hour scheduled ops |
+| **BTS airport lookup** | Names/cities |
+| **FAA NAS Status API** (live) | Current ground stops, delay programs, closures |
+
+## 4. Scoring methodology (deterministic)
+**Terminal Expansion Opportunity Score (0-100)** = weighted average of four components:
+
+| Component (weight) | Sub-metrics (weight within component) | Why it matters |
+|---|---|---|
+| **Demand growth (35%)** | Passenger CAGR 2023→2025 (40%), Jan-Jul 2026 vs 2025 growth (40%), 2025 vs 2019 recovery (20%) | Growth is what fills new capacity; mixes medium-term trend and current momentum |
+| **Capacity pressure (30%)** | Load factor (50%), share of seats on routes with ≥85% load factor (30%), passenger growth minus seat growth (20%) | Full planes + demand outpacing supply = existing capacity is binding |
+| **Congestion (20%)** | % departures delayed 15+ min (30%), avg taxi-out (30%), busiest-hour ops (20%), NAS delay minutes per arrival (20%) | Operational strain on the facility |
+| **Scale (15%)** | Total passengers (log) | Larger base = larger absolute return on a given % improvement |
+
+**Normalization:** each sub-metric is converted to a **percentile vs. a national peer group** (all US airports
+with ≥1M enplaned passengers, ~90 airports). Using a national reference (rather than ranking within the
+region) keeps scores comparable: a "70" in New England means the same as a "70" in Texas.
+
+**Missing data:** within a component, weights are re-normalized over available sub-metrics; a component with
+no data at all (e.g. congestion for airports with few on-time-reporting flights) is set to a **neutral 50**, so
+missing data neither helps nor hurts the rank, and the **confidence** label drops (High / Medium / Low).
+
+**Flags (rule-based):**
+- *Airside-constrained*: NAS delay and taxi-out both in the top quartile → growth may be capped by
+  runways/airspace, so terminal capacity alone may not unlock it.
+- *Cargo-heavy*: ≥30% of departures are cargo-only (e.g. ANC) → passenger metrics understate activity.
+- *Below peer size*, *Not recovered vs 2019*, *Limited delay data*.
+
+**Unmet demand** (not directly observable) is reported as proxies plus a transparent heuristic: route-level
+"spill" rises from 0% at ≤80% annual load factor to 15% at ≥95%, summed over routes, shown with a ±50% range
+and labeled low confidence.
+
+Weights are adjustable (sidebar sliders or by asking the agent, e.g. "weight growth twice as much").
+
+## 5. Where and how AI is used
+| Task | LLM? | Notes |
+|---|---|---|
+| Understand the question, pick tools & parameters | Yes | Claude tool use |
+| Resolve names ("LA", "Santa Ana") | Partly | Deterministic alias table + search tool; LLM states the assumption |
+| Compute any metric, score or ranking | No | Python only; reproducible and unit-tested |
+| Explain results, connect metrics into a narrative | Yes | Must cite tool numbers; system prompt forbids invented figures |
+| Domain context (e.g. SNA's community noise/access caps, SFO's closely spaced runways and fog) | Yes | Must be labeled "general knowledge, not from the dataset" |
+| Follow-ups, re-weighting | Yes | Conversation memory + re-calling tools with new weights |
+
+Every answer shows a **"How I got this"** panel with the exact tool calls and raw outputs, so an analyst can
+audit the reasoning.
+
+## 5b. What the model says about the sample questions (deterministic outputs)
+| Question | Key result | Why it is interesting |
+|---|---|---|
+| New England candidates | BOS 67.2, BGR 61.7 (Medium conf.), PWM 56.6, BTV 53.6, BDL 46.3, PVD 43.6 | BOS leads on pressure/congestion but is flagged airside-constrained; PWM is a mid-size airport with 82% load factor and 7.5%/yr growth |
+| LAX vs SNA congestion | Congestion index 65.5 vs 47.0; delay rate ~equal (24.5% vs 25.1%) but LAX has 4x busiest-hour ops (91 vs 22) and longer taxi-out (18.5 vs 15.9 min) | Same delay rate, very different physical congestion; SNA's limits are largely regulatory (labeled as general knowledge) |
+| ANC long-haul share | 4.9% of passenger departures ≥3,000 mi; 32.4% including cargo; 54% of departures are cargo-only | The answer depends on definitions; the agent shows the sensitivity instead of one number |
+| SFO unmet demand | ~0.95M spilled passengers/yr (0.5-1.4M, low confidence); load factor 82% (90th pct), NAS delay 14.2 min/arrival (highest among peers), flat seat growth | Demand exists but airside limits cap supply, so terminal capacity alone may not unlock it |
+
+## 6. Key tradeoffs
+1. **Snapshot vs. live data.** Historical data is pre-aggregated into small CSVs (fast, reproducible,
+   testable, works offline; BTS downloads take minutes). Live FAA status is fetched per question. Cost: the
+   snapshot must be refreshed with `etl/`.
+2. **Percentiles vs. raw values / z-scores.** Percentiles are robust to outliers (e.g. JFK's size) and easy to
+   explain, but lose magnitude information. Raw values are always shown next to scores.
+3. **Proxies vs. ground truth.** No gate counts, terminal square footage or cost data publicly at scale. The
+   score finds capacity *pressure*; a real investment case needs a project-level study.
+4. **Sampled delay data.** Two months (winter + summer) instead of 12 to fit the one-day build; seasonal bias
+   is reduced but not removed. The ETL script supports any number of months.
+5. **LLM flexibility vs. control.** The LLM can only act through 8 typed tools, which limits creativity but
+   prevents hallucinated numbers and keeps answers consistent between runs.
+6. **Simple, explainable weights vs. fitted model.** Weights are expert judgment, not learned (no labeled
+   "successful expansion" data). With the firm's past deal outcomes, weights could be calibrated.
+
+## 7. Assumptions & limitations
+- Enplanements approximated by T-100 departing segment passengers (includes connections, like FAA counts).
+- Delay metrics cover only on-time reporting carriers (large US airlines + major regionals).
+- "Long-haul" defaults to ≥3,000 statute miles; the tool reports sensitivity at 2,000/2,500/3,000/4,000.
+- 2026 is partial (Jan-Jul); YTD growth compares like-for-like months.
+- No regulatory, environmental, community or funding constraints are modeled (the LLM may mention them as
+  labeled context).
+
+## 8. With more time / path to production
+- Add FAA Terminal Area Forecast (official 20-year projections) and FAA ACAIS enplanements.
+- Add facility data (gates, terminal sq ft) from airport master plans → passengers per gate as a true
+  terminal-capacity metric.
+- Calibrate weights with the firm's analysts and historical deals; add backtesting (did high-score airports
+  in 2015 expand and grow?).
+- Scheduled refresh of the snapshot; caching and observability (log every tool call and answer).
+- Evaluation harness: `eval/questions.md` rubric run automatically with an LLM grader.

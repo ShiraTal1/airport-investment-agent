@@ -1,0 +1,13 @@
+{
+  "sources": [
+    "BTS T-100 Segment (All Carriers: US + foreign, domestic + international) via TranStats download, table T_T100_SEGMENT_ALL_CARRIER",
+    "BTS Airline On-Time Performance (Reporting Carrier) monthly files, TranStats PREZIP",
+    "BTS L_AIRPORT lookup table (airport names)",
+    "FAA NAS Status API (live): https://nasstatus.faa.gov/api/airport-status-information"
+  ],
+  "vintage": {
+    "Traffic (T-100)": "Full years 2019, 2023, 2024, 2025; Jan-Jul 2026 (latest released). Downloaded 2026-10-28.",
+    "Delays/taxi (On-Time)": "Sample months: Dec 2025 and Jun 2026 (one winter + one summer month). Downloaded 2026-10-28.",
+    "Live status": "Fetched at question time."
+  }
+}
