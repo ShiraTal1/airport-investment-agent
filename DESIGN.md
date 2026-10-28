@@ -19,7 +19,7 @@ ranks *capacity need*, not project IRR.
 | **Measure** | Public BTS/FAA data turned into KPIs for demand, activity and capacity pressure (Section 3) |
 | **Rank** | A pre-defined, deterministic formula; same data → same ranking (Section 4) |
 | **Explain** | Why an airport ranks high, which data supports it, and what is still unknown (Section 5) |
-| **Validate** | Automated checks of the data against its source and against published airport totals (Section 3b); every answer shows the exact calculations behind it, so it can be checked in seconds (Section 5) |
+| **Validate** | Automated tests check the data (2025 passenger totals match airport-published figures within 0.2%-4%); every answer shows the exact calculations behind it, so it can be checked in seconds (Section 5) |
 
 The goal is not to build an agent for its own sake, but to make an investment screening decision faster,
 more consistent and easier to audit.
@@ -27,28 +27,28 @@ more consistent and easier to audit.
 ## 2. Architecture
 
 ```
- Analyst asks a question in the Streamlit chat
-                 │
-                 ▼
- (1) Claude (LLM) understands the question and chooses which tool to call
-                 │
-                 ▼
- (2) Tools receive the request and pass it to the scoring engine
-                 │
-                 ▼
- (3) Scoring engine (Python, no LLM) computes metrics → percentiles →
-     component scores → Opportunity Score → tier, flags, recommendation
-                 │  reads
-                 ▼
- (4) Data: BTS snapshot (CSV files) + live FAA NAS Status API
-                 │
-                 ▼
- (5) The numbers go back to Claude, which writes the answer and explains it
+ (1) Analyst asks a question in the Streamlit chat
+                │
+                ▼
+ (2) Claude (LLM) understands the question and chooses which tool to call
+                │
+                ▼
+ (3) Scoring engine (Python, no LLM)            ◄── reads the data:
+     computes metrics → percentiles →                BTS snapshot (CSV files)
+     component scores → Opportunity Score →          + live FAA NAS Status API
+     tier, flags, recommendation
+                │  returns the numbers
+                ▼
+ (4) Claude turns the numbers into a written answer
      (it can only use the numbers it received)
+                │
+                ▼
+ (5) Streamlit shows the answer, with a "How I got this" panel
+     listing the exact tool calls and numbers
 ```
 
 **Where the score is calculated:** only in step (3), in `agent/analytics.py`. The LLM never calculates or
-changes a score; it only chooses what to ask for and explains the result.
+changes a score: it chooses what to ask for (step 2) and turns the result into words (step 4).
 
 | Layer | File | Responsibility |
 |---|---|---|
@@ -61,26 +61,10 @@ changes a score; it only chooses what to ask for and explains the result.
 ## 3. Data (all public)
 | Source | Used for |
 |---|---|
-| **BTS T-100 Segment, all carriers** (US + foreign, domestic + international), 2019, 2023-2025, Jan-Jul 2026 | Passengers, seats, departures, load factor, growth, route distances, cargo share |
+| **BTS T-100 Segment, all carriers**: the monthly traffic report every airline (US + foreign) files with the US Department of Transportation for each flight segment; 2019, 2023-2025, Jan-Jul 2026 | Passengers, seats, departures, load factor, growth, route distances, cargo share |
 | **BTS Airline On-Time Performance** (reporting carriers), sample months Dec 2025 + Jun 2026 | Delay rate, taxi-out/in, NAS (airspace/airport) delay, busiest-hour scheduled ops |
 | **BTS airport lookup** | Names/cities |
 | **FAA NAS Status API** (live) | Current ground stops, delay programs, closures |
-
-## 3b. Data pipeline and validation
-**How data is retrieved and processed** (`etl/`): (1) T-100 Segment is pulled per year from the BTS TranStats
-download endpoint (the same form the website's Download button posts); (2) On-Time Performance monthly files
-come from the BTS PREZIP directory; (3) rows are aggregated to one row per airport-year (passengers, seats,
-departures by distance band, cargo-only flights, international share) and one row per route (2025); (4) the
-small CSVs in `data/` are what the app reads. Live FAA status is fetched at question time and parsed from XML.
-
-**How the data was checked** (`tests/test_data_validation.py`, runs automatically):
-
-| Check | Result |
-|---|---|
-| Completeness | All 5 years present; every airport with >5M passengers has 12 months for 2025; 2026 = Jan-Jul |
-| Plausibility | Load factor 50-100%, delay rate 5-60%, taxi-out 5-45 min for all 105 peer airports |
-| Internal consistency | Enplaned ≈ deplaned (within ±10%) at every peer airport; route file covers >90% of traffic |
-| **External cross-check** | 2025 total passengers vs airport-published figures for the 11 busiest US airports: within **0.2%-4%** (e.g. BOS 42.34M vs 42.26M published, LAX 73.40M vs 73.71M). T-100 runs slightly low because it counts only commercial carrier segments. The order matches for the top 7; places 8-10 (MIA, LAS, SFO) are within 0.6% of each other. |
 
 ## 4. Scoring methodology (deterministic)
 **Terminal Expansion Opportunity Score (0-100)** = weighted average of four components:
