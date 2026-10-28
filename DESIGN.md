@@ -57,6 +57,22 @@ more consistent and easier to audit.
 | **BTS airport lookup** | Names/cities |
 | **FAA NAS Status API** (live) | Current ground stops, delay programs, closures |
 
+## 3b. Data pipeline and validation
+**How data is retrieved and processed** (`etl/`): (1) T-100 Segment is pulled per year from the BTS TranStats
+download endpoint (the same form the website's Download button posts); (2) On-Time Performance monthly files
+come from the BTS PREZIP directory; (3) rows are aggregated to one row per airport-year (passengers, seats,
+departures by distance band, cargo-only flights, international share) and one row per route (2025); (4) the
+small CSVs in `data/` are what the app reads. Live FAA status is fetched at question time and parsed from XML.
+
+**How the data was checked** (`tests/test_data_validation.py`, runs automatically):
+
+| Check | Result |
+|---|---|
+| Completeness | All 5 years present; every airport with >5M passengers has 12 months for 2025; 2026 = Jan-Jul |
+| Plausibility | Load factor 50-100%, delay rate 5-60%, taxi-out 5-45 min for all ~90 peer airports |
+| Internal consistency | Enplaned ≈ deplaned (within ±10%) at every peer airport; route file covers >90% of traffic |
+| **External cross-check** | 2025 total passengers vs airport-published figures for the 11 busiest US airports: within **0.2%-4%** (e.g. BOS 42.34M vs 42.26M published, LAX 73.40M vs 73.71M). T-100 runs slightly low because it counts only commercial carrier segments. The order matches for the top 7; places 8-10 (MIA, LAS, SFO) are within 0.6% of each other. |
+
 ## 4. Scoring methodology (deterministic)
 **Terminal Expansion Opportunity Score (0-100)** = weighted average of four components:
 
@@ -66,6 +82,21 @@ more consistent and easier to audit.
 | **Capacity pressure (30%)** | Load factor (50%), share of seats on routes with ≥85% load factor (30%), passenger growth minus seat growth (20%) | Full planes + demand outpacing supply = existing capacity is binding |
 | **Congestion (20%)** | % departures delayed 15+ min (30%), avg taxi-out (30%), busiest-hour ops (20%), NAS delay minutes per arrival (20%) | Operational strain on the facility |
 | **Scale (15%)** | Total passengers (log) | Larger base = larger absolute return on a given % improvement |
+
+**Explicit formula:**
+
+```
+Opportunity Score = 0.35·G + 0.30·C + 0.20·K + 0.15·S            (0-100)
+
+G (demand growth)     = 0.4·P(CAGR 2023-25) + 0.4·P(growth Jan-Jul 2026 vs 2025) + 0.2·P(2025 / 2019)
+C (capacity pressure) = 0.5·P(load factor) + 0.3·P(share of seats on routes with LF ≥ 85%)
+                        + 0.2·P(passenger growth − seat growth)
+K (congestion)        = 0.3·P(% departures delayed 15+ min) + 0.3·P(avg taxi-out)
+                        + 0.2·P(busiest-hour ops) + 0.2·P(NAS delay min per arrival)
+S (scale)             = P(log10 total passengers)
+
+P(x) = percentile of x among US airports with ≥ 1M enplaned passengers (0-100)
+```
 
 **Normalization:** each sub-metric is converted to a **percentile vs. a national peer group** (all US airports
 with ≥1M enplaned passengers, ~90 airports). Using a national reference (rather than ranking within the
