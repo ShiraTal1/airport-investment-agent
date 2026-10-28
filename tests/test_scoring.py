@@ -90,6 +90,18 @@ def test_capex_feasibility_ranges_and_labels():
     assert y["scenario"]["added_annual_passengers"] == 1_000_000
 
 
+def test_project_report_structure():
+    x = run_tool("project_report", {"code": "PWM", "project": "terminal_expansion"})
+    for k in ("executive_summary", "financial_case_base", "key_assumptions", "scenarios", "data_quality",
+              "validation_required"):
+        assert k in x
+    sc = x["scenarios"]
+    assert sc["conservative"]["npv_usd_m"] < sc["base"]["npv_usd_m"] < sc["optimistic"]["npv_usd_m"]
+    y = run_tool("project_report", {"code": "SFO", "project": "runway_airfield"})
+    assert y["financial_case_base"] is None and "not estimable" in y["executive_summary"]["initial_conclusion"]
+    assert A._irr([-100, 60, 60]) > 0.1
+
+
 def test_unknown_tool_does_not_crash():
     assert "error" in run_tool("nope", {})
 

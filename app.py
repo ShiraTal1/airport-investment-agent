@@ -24,6 +24,11 @@ EXAMPLES = [
 ]
 
 
+def md_safe(text: str) -> str:
+    """Streamlit renders $...$ as LaTeX math; escape dollar signs so amounts like $1.2B display as text."""
+    return (text or "").replace("\\$", "$").replace("$", "\\$")
+
+
 def get_secret(name: str) -> str | None:
     try:
         if name in st.secrets:
@@ -96,7 +101,7 @@ with tab_chat:
 
     for msg in st.session_state["history"]:
         with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+            st.markdown(md_safe(msg["content"]))
             if msg.get("tool_calls"):
                 with st.expander(f"🔎 How I got this ({len(msg['tool_calls'])} tool calls)"):
                     for tc in msg["tool_calls"]:
@@ -110,7 +115,7 @@ with tab_chat:
         agent = st.session_state["agent"]
         st.session_state["history"].append({"role": "user", "content": prompt})
         with st.chat_message("user"):
-            st.markdown(prompt)
+            st.markdown(md_safe(prompt))
         # Pass slider weights as context if the user changed them
         ui_w = st.session_state.get("ui_weights", {})
         weight_note = ""
@@ -123,7 +128,7 @@ with tab_chat:
                     answer, calls = turn.text, turn.tool_calls
                 except Exception as exc:
                     answer, calls = f"⚠️ Error calling the model: {exc}", []
-            st.markdown(answer)
+            st.markdown(md_safe(answer))
             if calls:
                 with st.expander(f"🔎 How I got this ({len(calls)} tool calls)"):
                     for tc in calls:

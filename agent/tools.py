@@ -121,6 +121,25 @@ TOOLS = [
             "horizon_years": {"type": "integer", "default": 10}}, "required": ["code"]},
     },
     {
+        "name": "project_report",
+        "description": "Uniform short investment report for ONE project at ONE airport: executive summary, financial "
+                       "case (capex, added revenue, opex, cash flow, NPV, IRR, payback), key assumptions, "
+                       "conservative/base/optimistic scenarios, data quality (official / estimated / missing) and "
+                       "validation required. Also says whether the project matches the airport's screened needs. "
+                       "Full financials for terminal_expansion and new_terminal; other types return the same "
+                       "structure with financials marked not estimable.",
+        "input_schema": {"type": "object", "properties": {
+            "code": {"type": "string"},
+            "project": {"type": "string", "enum": list(A.PROJECT_TYPES), "default": "terminal_expansion"},
+            "added_annual_pax": {"type": "number"}}, "required": ["code"]},
+    },
+    {
+        "name": "project_needs",
+        "description": "Which project types an airport most likely needs (rule-based: terminal expansion, "
+                       "runway/airfield, renovation). Not every airport needs every project.",
+        "input_schema": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]},
+    },
+    {
         "name": "live_faa_status",
         "description": "Live FAA NAS status right now (ground stops, delay programs, closures). Optionally filter "
                        "to airport codes. Use for 'right now/today' questions or to add current context.",
@@ -194,6 +213,13 @@ def run_tool(name: str, args: dict) -> dict:
             code = _resolve(args["code"], assumptions)
             out = A.capex_feasibility(code, args.get("added_annual_pax"), int(args.get("horizon_years", 10))) \
                 if code else {"error": "airport not found"}
+        elif name == "project_report":
+            code = _resolve(args["code"], assumptions)
+            out = A.project_report(code, args.get("project", "terminal_expansion"), args.get("added_annual_pax")) \
+                if code else {"error": "airport not found"}
+        elif name == "project_needs":
+            code = _resolve(args["code"], assumptions)
+            out = A.project_needs(code) if code else {"error": "airport not found"}
         elif name == "live_faa_status":
             live = data.live_faa_status()
             codes = {c.upper() for c in (args.get("codes") or [])}

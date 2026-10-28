@@ -827,3 +827,176 @@ def capex_feasibility(code: str, added_annual_pax: float | None = None, horizon_
             "treat any early figure as likely to grow.",
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# Project-level investment report (one uniform format per project type)
+# ---------------------------------------------------------------------------
+PROJECT_TYPES = {
+    "terminal_expansion": "Expand the existing terminal (more gates, gate-area and processing space)",
+    "new_terminal": "Build a new terminal / replacement terminal",
+    "terminal_renovation": "Modernize the existing terminal without adding capacity",
+    "parking_expansion": "Add public parking capacity",
+    "runway_airfield": "Add or extend a runway / airfield capacity",
+}
+FIN = {"construction_years": 3, "operating_years": 30, "discount_rate": 0.07,
+       "opex_to_revenue_base": round(21.8 / 34.5, 2)}  # FAA CATS FY2025 cash opex / operating revenue = 0.63
+
+
+def project_needs(code: str) -> dict:
+    """Rule-based screen of WHICH project type an airport most likely needs (not all airports need all)."""
+    m = metrics_table(); s = score_table()
+    if code not in m.index:
+        return {"error": f"{code} not found"}
+    r, sc = m.loc[code], s.loc[code]
+    needs = []
+    if any(f.startswith("AIRSIDE-CONSTRAINED") for f in sc["flags"]):
+        needs.append({"project": "runway_airfield", "why": "Airside-constrained flag: NAS delays and taxi-out in "
+                      "the top quartile; runway/airspace capacity may cap growth before the terminal does."})
+    if pd.notna(sc["capacity_pressure"]) and sc["capacity_pressure"] >= 60 and pd.notna(sc["demand_growth"]) \
+            and sc["demand_growth"] >= 50:
+        needs.append({"project": "terminal_expansion", "why": f"Capacity pressure {sc['capacity_pressure']:.0f} and "
+                      f"demand growth {sc['demand_growth']:.0f} (percentiles): full planes and growing demand."})
+    elif pd.notna(sc["demand_growth"]) and sc["demand_growth"] >= 70:
+        needs.append({"project": "terminal_expansion", "why": f"Strong demand growth ({sc['demand_growth']:.0f}) "
+                      "suggests capacity will be needed even though pressure is moderate today."})
+    if not needs:
+        needs.append({"project": "terminal_renovation", "why": "No strong capacity signal: if anything, "
+                      "modernization rather than added capacity; revenue case must come from the airport."})
+    return {"airport": code, "suggested_projects": needs,
+            "note": "Rule-based screen from traffic and delay data. Parking needs cannot be screened (no public "
+                    "parking utilization data)."}
+
+
+def _irr(cfs: list[float]) -> float | None:
+    def npv(rate):
+        return sum(cf / (1 + rate) ** t for t, cf in enumerate(cfs))
+    lo, hi = -0.99, 1.0
+    if npv(lo) * npv(hi) > 0:
+        return None
+    for _ in range(200):
+        mid = (lo + hi) / 2
+        if npv(lo) * npv(mid) <= 0:
+            hi = mid
+        else:
+            lo = mid
+    return round(mid, 4)
+
+
+def _cash_flows(capex: float, full_revenue: float, opex_ratio: float, ramp_years: int) -> dict:
+    cy, oy, r = FIN["construction_years"], FIN["operating_years"], FIN["discount_rate"]
+    cfs, rows = [], []
+    for t in range(cy + oy):
+        if t < cy:
+            rev, opx, cap = 0.0, 0.0, capex / cy
+        else:
+            k = t - cy + 1
+            rev = full_revenue * min(1.0, k / ramp_years)
+            opx, cap = rev * opex_ratio, 0.0
+        cf = rev - opx - cap
+        cfs.append(cf); rows.append((t, rev, opx, cap, cf))
+    npv = sum(cf / (1 + r) ** t for t, cf in enumerate(cfs))
+    cum, payback = 0.0, None
+    for t, cf in enumerate(cfs):
+        cum += cf
+        if payback is None and cum >= 0 and t >= cy:
+            payback = t + 1
+    M = 1e6
+    sample = [{"year": t + 1, "revenue_m": round(a / M, 1), "opex_m": round(b / M, 1), "capex_m": round(c / M, 1),
+               "net_cash_flow_m": round(d / M, 1)} for t, a, b, c, d in rows if t in (0, 3, 7, 12, 20, 32)]
+    return {"npv_m": round(npv / M), "irr": _irr(cfs), "payback_years_from_start": payback,
+            "cash_flow_sample": sample}
+
+
+def project_report(code: str, project: str = "terminal_expansion", added_annual_pax: float | None = None) -> dict:
+    """Uniform short investment report for one project at one airport."""
+    code = code.upper()
+    if project not in PROJECT_TYPES:
+        return {"error": f"Unknown project '{project}'", "project_types": PROJECT_TYPES}
+    m = metrics_table()
+    if code not in m.index:
+        return {"error": f"{code} not found"}
+    r = m.loc[code]; s = score_table().loc[code]
+    needs = project_needs(code)
+    fit = any(n["project"] == project for n in needs["suggested_projects"])
+
+    base = {"airport": code, "name": r["name"], "project": project, "project_description": PROJECT_TYPES[project],
+            "potential": s["potential"], "confidence": s["confidence"], "recommendation": s["recommendation"],
+            "flags": [f.split(":")[0] for f in s["flags"]],
+            "project_fit": ("Matches the airport's screened needs" if fit else
+                            "Not among the screened needs for this airport") + f": {needs['suggested_projects']}",
+            "financial_assumptions": {"construction_years": FIN["construction_years"],
+                                      "operating_years": FIN["operating_years"],
+                                      "discount_rate": FIN["discount_rate"],
+                                      "ramp": "Added traffic ramps up linearly over 10 operating years"}}
+
+    if project in ("terminal_expansion", "new_terminal"):
+        f = capex_feasibility(code, added_annual_pax)
+        capex = f["capex_estimate_usd_millions"]
+        full_rev = f["added_operating_revenue_usd_millions_per_year"] * 1e6
+        scen = {
+            "conservative": _cash_flows(capex["high"] * 1e6, full_rev, 1 - MARGIN_RANGE[0], 15),
+            "base": _cash_flows(capex["central"] * 1e6, full_rev, FIN["opex_to_revenue_base"], 10),
+            "optimistic": _cash_flows(capex["low"] * 1e6, full_rev, 1 - MARGIN_RANGE[2], 7),
+        }
+        b = scen["base"]
+        verdict = ("Positive NPV at 7% in the base case" if b["npv_m"] > 0 else
+                   "Negative NPV at 7% in the base case: does not pay back on airport operating income alone")
+        base.update({
+            "executive_summary": {"investment_usd_m_base": capex["central"],
+                                  "investment_range_usd_m": [capex["low"], capex["high"]],
+                                  "added_passengers_per_year": f["scenario"]["added_annual_passengers"],
+                                  "initial_conclusion": verdict},
+            "financial_case_base": {"capex_usd_m": capex["central"],
+                                    "added_revenue_usd_m_per_year_at_full_use": round(full_rev / 1e6, 1),
+                                    "added_opex_usd_m_per_year_at_full_use":
+                                        round(full_rev * FIN["opex_to_revenue_base"] / 1e6, 1),
+                                    "npv_usd_m_at_7pct": b["npv_m"], "irr": b["irr"],
+                                    "payback_years_from_construction_start": b["payback_years_from_start"],
+                                    "cash_flow_sample_usd_m": b["cash_flow_sample"]},
+            "scenarios": {k: {"capex_usd_m": c, "npv_usd_m": v["npv_m"], "irr": v["irr"],
+                              "payback_years": v["payback_years_from_start"]}
+                          for (k, v), c in zip(scen.items(), (capex["high"], capex["central"], capex["low"]))},
+            "scenario_definitions": "Conservative: high capex, 75% opex ratio, 15-yr ramp. Base: central capex, "
+                                    "63% opex ratio (CATS FY2025), 10-yr ramp. Optimistic: low capex, 55% opex, 7-yr ramp.",
+            "key_assumptions": [
+                {"assumption": "Capex per sq ft $1,500-$3,662 (4 US terminals)", "impact": "Largest driver: high vs "
+                 "low cost changes NPV by more than the whole revenue case"},
+                {"assumption": f"Revenue per enplanement ${f['revenue_per_enplanement_usd']} (CATS tier average)",
+                 "impact": "Each ±10% moves base NPV roughly ±10% of the revenue side"},
+                {"assumption": f"Opex = {FIN['opex_to_revenue_base']:.0%} of added revenue (CATS system ratio)",
+                 "impact": "Incremental opex may be lower; base case is conservative here"},
+                {"assumption": "Growth-based sizing and 10-year ramp", "impact": "Slower ramp delays payback"},
+                {"assumption": "7% discount rate, 30 operating years, no terminal value", "impact": "Lower rate or "
+                 "residual value improve NPV"}],
+            "data_quality": {
+                "official": ["Traffic and growth (BTS T-100)", "Delays (BTS On-Time)",
+                             "Federal AIP grants awarded (FAA)", "Airport revenue and opex totals (FAA CATS FY2025)"],
+                "estimated": ["Construction cost per sq ft (1 final cost, 3 budgets/estimates)",
+                              "Terminal area per passenger", "Revenue and opex per passenger (tier averages)",
+                              "Ramp-up, discount rate, construction period"],
+                "missing": ["Airport-specific construction estimate", "Airport-specific revenue per passenger",
+                            "Current terminal utilization (gates, peak-hour throughput)", "Financing structure"]},
+            "estimate_drift_warning": "Early terminal estimates in the benchmark set rose 55%-171%.",
+        })
+    else:
+        why = {"terminal_renovation": "no added capacity, so the revenue case depends on airport-specific "
+                                      "non-aeronautical uplift and asset-condition data",
+               "parking_expansion": "no public data on parking utilization, spaces or price per space",
+               "runway_airfield": "ACRP Report 120 has a runway cost relationship but in FY2014 dollars, as a "
+                                  "proof-of-concept, and runway benefits are delay savings and slots, not "
+                                  "directly airport revenue"}[project]
+        base.update({
+            "executive_summary": {"investment_usd_m_base": None, "initial_conclusion":
+                                  f"Financial case not estimable from public data: {why}."},
+            "financial_case_base": None, "scenarios": None,
+            "key_assumptions": [{"assumption": "Not modeled", "impact": why}],
+            "data_quality": {"official": ["Traffic, growth and delay data for context"],
+                             "estimated": [], "missing": ["Project cost", "Project revenue/benefit",
+                                                          "Utilization of the asset"]},
+        })
+    base["validation_required"] = DATA_REQUIRED_BEFORE_INVESTMENT[:3] + (
+        ["Runway/airspace capacity study (airside-constrained)"] if "AIRSIDE-CONSTRAINED" in base["flags"] else []) \
+        + ["Deal structure (P3/concession/lease) and regulated rate base"]
+    base["overall_confidence"] = "Low (screening only)"
+    return base
