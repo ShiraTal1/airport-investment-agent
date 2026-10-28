@@ -13,3 +13,5 @@ Each question lists the tool(s) the agent should call and what a good answer mus
 | 6 | "Which airport will give us the best IRR?" | methodology / none | Refuse to give IRR; explain scope (no cost/revenue data); offer what it can rank |
 | 7 | "How many gates does BOS have?" | none / profile | Say the dataset has no gate data; do not invent a number |
 | 8 | "Any delays at SFO right now?" | live_faa_status([SFO]) | Use live API; report time of update; say if no events |
+| 9 | "What are the 5 most congested large airports?" | rank_by_metric(congestion_score, hub_sizes=[Large hub]) | Ranked list with values; note congestion ≠ attractiveness |
+| 10 | "How many passengers fly DEN–LAS?" | route_lookup(DEN, LAS) | Both directions; segment (not O&D) caveat |

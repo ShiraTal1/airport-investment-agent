@@ -55,6 +55,18 @@ def test_alias_resolution_and_tool_assumptions():
     assert any("LAX" in a for a in out["assumptions_made"])
 
 
+def test_unmet_flights_and_new_tools():
+    d = A.demand_pressure("SFO")
+    f = d["estimated_unmet_departing_flights_per_year"]
+    assert 0 < f["low"] < f["central"] < f["high"]
+    r = run_tool("rank_by_metric", {"metric": "load_factor", "states": ["MA", "ME"], "top_n": 3, "min_enplaned": 0})
+    vals = [x["value"] for x in r["ranking"]]
+    assert vals == sorted(vals, reverse=True) and "data_period" in r
+    rl = run_tool("route_lookup", {"origin": "Denver", "dest": "LAS"})
+    assert rl["directions"][0]["found"] and rl["total_passengers_both_directions"] > rl["directions"][0]["passengers"]
+    assert "error" in run_tool("rank_by_metric", {"metric": "nope"})
+
+
 def test_unknown_tool_does_not_crash():
     assert "error" in run_tool("nope", {})
 

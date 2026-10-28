@@ -466,7 +466,12 @@ def demand_pressure(code: str) -> dict:
     r = r[r["passengers"] >= 10 * r["dep_pax_flights"].clip(lower=1)]  # passenger routes only
     r["load_factor"] = r["passengers"] / r["seats"]
     r["est_spilled_pax"] = r.apply(lambda x: x["passengers"] * _spill_rate(x["load_factor"]), axis=1)
+    # Convert spilled passengers into flights at each route's own average passengers per flight
+    r["pax_per_flight"] = r["passengers"] / r["dep_pax_flights"].clip(lower=1)
+    r["est_spilled_flights"] = r["est_spilled_pax"] / r["pax_per_flight"].clip(lower=1)
     est = r["est_spilled_pax"].sum()
+    est_fl = r["est_spilled_flights"].sum()
+    pax_deps = r["dep_pax_flights"].sum()
     tight = r[(r["load_factor"] >= 0.85) & (r["seats"] >= 10000)].sort_values("passengers", ascending=False)
     prof = airport_profile(code)
     return {
@@ -481,9 +486,17 @@ def demand_pressure(code: str) -> dict:
             "method": "Sum over routes of passengers x spill rate; spill rate is 0% at <=80% annual load "
                       "factor rising linearly to 15% at >=95%. Range is +/-50%. Heuristic assumption, low confidence.",
         },
+        "estimated_unmet_departing_flights_per_year": {
+            "central": int(est_fl), "low": int(est_fl * 0.5), "high": int(est_fl * 1.5),
+            "per_day": round(est_fl / 365, 1),
+            "as_pct_of_passenger_departures": round(est_fl / pax_deps * 100, 1) if pax_deps else None,
+            "method": "Spilled passengers on each route divided by that route's average passengers per flight "
+                      "(i.e. extra flights of the same size airlines would need). Same low confidence.",
+        },
         "tightest_routes": [
             {"dest": t["dest"], "distance_mi": int(t["distance"]), "passengers": int(t["passengers"]),
-             "seats": int(t["seats"]), "load_factor_pct": round(t["load_factor"] * 100, 1)}
+             "seats": int(t["seats"]), "load_factor_pct": round(t["load_factor"] * 100, 1),
+             "est_unmet_flights_per_year": int(t["est_spilled_flights"])}
             for _, t in tight.head(8).iterrows()],
         "flags": prof["flags"],
         "interpretation_hints": [
@@ -519,3 +532,100 @@ def methodology(weights: dict | None = None) -> dict:
             "the score identifies where capacity pressure exists, not project-level profitability.",
         ],
     }
+
+
+# Metrics that can be ranked on their own (rank_by_metric)
+RANKABLE = {k: METRIC_LABELS.get(k, k) for k in [
+    "pax_enplaned", "pax_total", "recovery_vs_2019", "pax_cagr_2023_2025", "ytd_pax_growth",
+    "ytd_seat_growth", "demand_minus_supply_growth", "load_factor", "high_lf_route_share",
+    "intl_seat_share", "cargo_only_departure_share", "dep_delay15_rate", "arr_delay15_rate",
+    "cancel_rate", "avg_taxi_out_min", "avg_taxi_in_min", "avg_dep_delay_min",
+    "nas_delay_min_per_arrival", "peak_hour_ops", "congestion_score", "demand_growth_score",
+    "capacity_pressure_score", "opportunity_score"]}
+PCT_METRICS = {"recovery_vs_2019", "pax_cagr_2023_2025", "ytd_pax_growth", "ytd_seat_growth",
+               "demand_minus_supply_growth", "load_factor", "high_lf_route_share", "intl_seat_share",
+               "cargo_only_departure_share", "dep_delay15_rate", "arr_delay15_rate", "cancel_rate"}
+
+
+def _scope_mask(m: pd.DataFrame, region=None, states=None, codes=None):
+    """Same scoping rules as rank_airports. Returns (mask, description) or (None, error)."""
+    mask = pd.Series(True, index=m.index)
+    if codes:
+        return mask & m.index.isin([c.upper() for c in codes]), ", ".join(codes)
+    if states:
+        return mask & m["state"].isin([x.upper() for x in states]), ", ".join(states)
+    if region:
+        metro = METRO_GROUPS.get(region.strip().lower())
+        if metro:
+            return mask & m.index.isin(metro), f"{region} ({', '.join(metro)})"
+        canon, st = states_for_region(region)
+        if canon is None:
+            return None, f"Unknown region '{region}'. Pass a list of states instead."
+        if canon == "Contiguous US":
+            return mask & ~m["state"].isin(["AK", "HI"]), canon
+        if st:
+            return mask & m["state"].isin(st), f"{canon} ({', '.join(st)})"
+    return mask, "US"
+
+
+def rank_by_metric(metric: str, region: str | None = None, states: list[str] | None = None,
+                   codes: list[str] | None = None, hub_sizes: list[str] | None = None,
+                   top_n: int = 10, ascending: bool = False, min_enplaned: int = 1_000_000) -> dict:
+    """Rank airports on ONE metric (e.g. most congested, fastest growing, emptiest planes)."""
+    if metric not in RANKABLE:
+        return {"error": f"Unknown metric '{metric}'.", "available_metrics": RANKABLE}
+    m = metrics_table().copy()
+    s = score_table()
+    m["congestion_score"] = s["congestion"]
+    m["demand_growth_score"] = s["demand_growth"]
+    m["capacity_pressure_score"] = s["capacity_pressure"]
+    m["opportunity_score"] = s["opportunity_score"]
+    mask, scope = _scope_mask(m, region, states, codes)
+    if mask is None:
+        return {"error": scope}
+    if hub_sizes:
+        mask &= m["hub_size"].str.lower().isin([h.lower() for h in hub_sizes])
+    mask &= m["pax_enplaned"] >= min_enplaned
+    sub = m[mask & m[metric].notna()].sort_values(metric, ascending=ascending).head(top_n)
+    missing = int((mask & m[metric].isna()).sum())
+    rows = []
+    for rank, (code, r) in enumerate(sub.iterrows(), 1):
+        val = r[metric]
+        rows.append({"rank": rank, "code": code, "name": r["name"], "state": r["state"],
+                     "hub_size": r["hub_size"],
+                     "value": _fmt(val, "pct") if metric in PCT_METRICS else _fmt(val, "num"),
+                     "unit": "%" if metric in PCT_METRICS else "",
+                     "pax_enplaned_2025": int(r["pax_enplaned"]), "flags": s.at[code, "flags"]})
+    notes = [f"Filtered to airports with >= {min_enplaned:,} enplaned passengers in 2025."]
+    if missing:
+        notes.append(f"{missing} airport(s) in scope have no value for this metric (e.g. too few on-time "
+                     "reporting flights) and are not ranked.")
+    return {"metric": metric, "metric_label": RANKABLE[metric],
+            "order": "lowest first" if ascending else "highest first", "scope": scope,
+            "hub_sizes": hub_sizes, "ranking": rows, "notes": notes}
+
+
+def route_lookup(origin: str, dest: str) -> dict:
+    """Non-stop traffic between two airports in 2025, both directions."""
+    r = data.routes()
+    out = {"origin": origin.upper(), "dest": dest.upper(), "year": LATEST_FULL_YEAR, "directions": []}
+    for a, b in ((origin.upper(), dest.upper()), (dest.upper(), origin.upper())):
+        x = r[(r["origin"] == a) & (r["dest"] == b)]
+        if x.empty:
+            out["directions"].append({"from": a, "to": b, "found": False,
+                                      "note": "No non-stop segment in the dataset (no service, a very small "
+                                              "route below the file threshold, or a non-US origin)."})
+            continue
+        t = x.sum(numeric_only=True)
+        out["directions"].append({
+            "from": a, "to": b, "found": True, "distance_mi": int(x["distance"].max()),
+            "passengers": int(t["passengers"]), "seats": int(t["seats"]),
+            "load_factor_pct": round(t["passengers"] / t["seats"] * 100, 1) if t["seats"] else None,
+            "passenger_flights": int(t["dep_pax_flights"]), "cargo_only_flights": int(t["dep_cargo_only"]),
+            "freight_tons": round(t["freight_lbs"] / 2000, 0)})
+    found = [d for d in out["directions"] if d["found"]]
+    if found:
+        out["total_passengers_both_directions"] = sum(d["passengers"] for d in found)
+    out["notes"] = ["BTS T-100 segment data: passengers on that non-stop flight leg, including connecting "
+                    "passengers; not origin-destination demand."]
+    return out

@@ -20,6 +20,12 @@ WEIGHTS_SCHEMA = {
     "properties": {k: {"type": "number"} for k in A.DEFAULT_WEIGHTS},
 }
 
+DATA_PERIOD = {
+    "traffic": "BTS T-100: full-year 2025 (latest full year); growth vs 2019/2023; YTD = Jan-Jul 2026 vs Jan-Jul 2025",
+    "delays_taxi_peak_hour": "BTS On-Time Performance: sample of Dec 2025 + Jun 2026",
+    "routes": "BTS T-100 route level, 2025",
+}
+
 TOOLS = [
     {
         "name": "search_airports",
@@ -75,6 +81,30 @@ TOOLS = [
         "description": "Unmet-demand analysis for one airport: proxies (load factor, demand vs seat growth, delays), "
                        "a heuristic estimate of spilled passengers with a range, and the tightest routes.",
         "input_schema": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]},
+    },
+    {
+        "name": "rank_by_metric",
+        "description": "Rank airports on ONE metric, e.g. 'most congested' (congestion_score), 'fastest growing' "
+                       "(ytd_pax_growth or pax_cagr_2023_2025), 'fullest planes' (load_factor), 'longest taxi-out' "
+                       "(avg_taxi_out_min), 'most delayed' (dep_delay15_rate). Optional scope (region/states/codes) "
+                       "and hub-size filter. Use ascending=true for 'lowest'.",
+        "input_schema": {"type": "object", "properties": {
+            "metric": {"type": "string", "enum": list(A.RANKABLE)},
+            "region": {"type": "string"},
+            "states": {"type": "array", "items": {"type": "string"}},
+            "codes": {"type": "array", "items": {"type": "string"}},
+            "hub_sizes": {"type": "array", "items": {"type": "string",
+                          "enum": ["Large hub", "Medium hub", "Small hub", "Non-hub"]}},
+            "top_n": {"type": "integer", "default": 10},
+            "ascending": {"type": "boolean", "default": False},
+            "min_enplaned": {"type": "integer", "default": 1000000}}, "required": ["metric"]},
+    },
+    {
+        "name": "route_lookup",
+        "description": "Non-stop traffic between two airports in 2025 in BOTH directions: passengers, seats, "
+                       "load factor, flights, freight, distance.",
+        "input_schema": {"type": "object", "properties": {
+            "origin": {"type": "string"}, "dest": {"type": "string"}}, "required": ["origin", "dest"]},
     },
     {
         "name": "live_faa_status",
@@ -137,6 +167,15 @@ def run_tool(name: str, args: dict) -> dict:
         elif name == "demand_pressure":
             code = _resolve(args["code"], assumptions)
             out = A.demand_pressure(code) if code else {"error": "airport not found"}
+        elif name == "rank_by_metric":
+            codes = [c for c in (_resolve(c, assumptions) for c in args.get("codes") or []) if c] or None
+            out = A.rank_by_metric(args["metric"], region=args.get("region"), states=args.get("states"),
+                                   codes=codes, hub_sizes=args.get("hub_sizes"),
+                                   top_n=int(args.get("top_n", 10)), ascending=bool(args.get("ascending", False)),
+                                   min_enplaned=int(args.get("min_enplaned", 1_000_000)))
+        elif name == "route_lookup":
+            o, d = _resolve(args["origin"], assumptions), _resolve(args["dest"], assumptions)
+            out = A.route_lookup(o, d) if o and d else {"error": "airport not found"}
         elif name == "live_faa_status":
             live = data.live_faa_status()
             codes = {c.upper() for c in (args.get("codes") or [])}
@@ -153,6 +192,8 @@ def run_tool(name: str, args: dict) -> dict:
         out = {"error": f"{type(exc).__name__}: {exc}"}
     if assumptions:
         out = {**out, "assumptions_made": assumptions}
+    if name not in ("search_airports", "live_faa_status") and isinstance(out, dict) and "error" not in out:
+        out = {**out, "data_period": DATA_PERIOD}
     return _clean(out)
 
 

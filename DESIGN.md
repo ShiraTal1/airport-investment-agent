@@ -20,7 +20,7 @@ ranks *capacity need*, not project IRR.
         Claude (tool-use loop)  ── plans, resolves names, explains, handles follow-ups
                  │  calls tools (JSON)
                  ▼
-        Deterministic tools (Python)  ── rank / profile / compare / route_mix / demand_pressure / live status
+        Deterministic tools (Python)  ── rank / rank_by_metric / profile / compare / route_mix / route_lookup / demand_pressure / live status
                  │
         ┌────────┴──────────────┐
         ▼                       ▼
@@ -70,7 +70,8 @@ missing data neither helps nor hurts the rank, and the **confidence** label drop
 
 **Unmet demand** (not directly observable) is reported as proxies plus a transparent heuristic: route-level
 "spill" rises from 0% at ≤80% annual load factor to 15% at ≥95%, summed over routes, shown with a ±50% range
-and labeled low confidence.
+and labeled low confidence. Spilled passengers are converted to **flights** using each route's average
+passengers per flight (the extra same-size flights airlines would need).
 
 Weights are adjustable (sidebar sliders or by asking the agent, e.g. "weight growth twice as much").
 
@@ -93,7 +94,7 @@ audit the reasoning.
 | New England candidates | BOS 67.2, BGR 61.7 (Medium conf.), PWM 56.6, BTV 53.6, BDL 46.3, PVD 43.6 | BOS leads on pressure/congestion but is flagged airside-constrained; PWM is a mid-size airport with 82% load factor and 7.5%/yr growth |
 | LAX vs SNA congestion | Congestion index 65.5 vs 47.0; delay rate ~equal (24.5% vs 25.1%) but LAX has 4x busiest-hour ops (91 vs 22) and longer taxi-out (18.5 vs 15.9 min) | Same delay rate, very different physical congestion; SNA's limits are largely regulatory (labeled as general knowledge) |
 | ANC long-haul share | 4.9% of passenger departures ≥3,000 mi; 32.4% including cargo; 54% of departures are cargo-only | The answer depends on definitions; the agent shows the sensitivity instead of one number |
-| SFO unmet demand | ~0.95M spilled passengers/yr (0.5-1.4M, low confidence); load factor 82% (90th pct), NAS delay 14.2 min/arrival (highest among peers), flat seat growth | Demand exists but airside limits cap supply, so terminal capacity alone may not unlock it |
+| SFO unmet demand | ~0.95M spilled passengers/yr (0.5-1.4M) ≈ ~6,000 flights/yr (~16 per day), low confidence; load factor 82% (90th pct), NAS delay 14.2 min/arrival (highest among peers), flat seat growth | Demand exists but airside limits cap supply, so terminal capacity alone may not unlock it |
 
 ## 6. Key tradeoffs
 1. **Snapshot vs. live data.** Historical data is pre-aggregated into small CSVs (fast, reproducible,
@@ -105,7 +106,7 @@ audit the reasoning.
    score finds capacity *pressure*; a real investment case needs a project-level study.
 4. **Sampled delay data.** Two months (winter + summer) instead of 12 to fit the one-day build; seasonal bias
    is reduced but not removed. The ETL script supports any number of months.
-5. **LLM flexibility vs. control.** The LLM can only act through 8 typed tools, which limits creativity but
+5. **LLM flexibility vs. control.** The LLM can only act through 10 typed tools, which limits creativity but
    prevents hallucinated numbers and keeps answers consistent between runs.
 6. **Simple, explainable weights vs. fitted model.** Weights are expert judgment, not learned (no labeled
    "successful expansion" data). With the firm's past deal outcomes, weights could be calibrated.
