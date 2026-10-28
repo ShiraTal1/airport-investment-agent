@@ -92,14 +92,18 @@ with tab_chat:
                 st.session_state["pending"] = ex
                 st.rerun()
 
-    for msg in st.session_state["history"]:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-            if msg.get("tool_calls"):
-                with st.expander(f"🔎 How I got this ({len(msg['tool_calls'])} tool calls)"):
-                    for tc in msg["tool_calls"]:
-                        st.markdown(f"**{tc['name']}** `{tc['input']}`")
-                        st.json(tc["output"], expanded=False)
+    # All messages go into this container, which sits ABOVE the input box,
+    # so the "ask another question" box always stays below the latest answer.
+    chat_area = st.container()
+    with chat_area:
+        for msg in st.session_state["history"]:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+                if msg.get("tool_calls"):
+                    with st.expander(f"🔎 How I got this ({len(msg['tool_calls'])} tool calls)"):
+                        for tc in msg["tool_calls"]:
+                            st.markdown(f"**{tc['name']}** `{tc['input']}`")
+                            st.json(tc["output"], expanded=False)
 
     prompt = st.chat_input("Ask about US airports…") or voice_text or st.session_state.pop("pending", None)
     if prompt and api_key:
@@ -107,26 +111,27 @@ with tab_chat:
             st.session_state["agent"] = AirportAgent(api_key=api_key)
         agent = st.session_state["agent"]
         st.session_state["history"].append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
         # Pass slider weights as context if the user changed them
         ui_w = st.session_state.get("ui_weights", {})
         weight_note = ""
         if any(abs(ui_w.get(k, v) - v) > 1e-9 for k, v in A.DEFAULT_WEIGHTS.items()):
             weight_note = f"\n\n[UI setting: use custom score weights {ui_w} in scoring tools]"
-        with st.chat_message("assistant"):
-            with st.spinner("Analyzing…"):
-                try:
-                    turn = agent.ask(prompt + weight_note)
-                    answer, calls = turn.text, turn.tool_calls
-                except Exception as exc:
-                    answer, calls = f"⚠️ Error calling the model: {exc}", []
-            st.markdown(answer)
-            if calls:
-                with st.expander(f"🔎 How I got this ({len(calls)} tool calls)"):
-                    for tc in calls:
-                        st.markdown(f"**{tc['name']}** `{tc['input']}`")
-                        st.json(tc["output"], expanded=False)
+        with chat_area:
+            with st.chat_message("user"):
+                st.markdown(prompt)
+            with st.chat_message("assistant"):
+                with st.spinner("Analyzing…"):
+                    try:
+                        turn = agent.ask(prompt + weight_note)
+                        answer, calls = turn.text, turn.tool_calls
+                    except Exception as exc:
+                        answer, calls = f"⚠️ Error calling the model: {exc}", []
+                st.markdown(answer)
+                if calls:
+                    with st.expander(f"🔎 How I got this ({len(calls)} tool calls)"):
+                        for tc in calls:
+                            st.markdown(f"**{tc['name']}** `{tc['input']}`")
+                            st.json(tc["output"], expanded=False)
         st.session_state["history"].append({"role": "assistant", "content": answer, "tool_calls": calls})
     elif prompt and not api_key:
         st.warning("Please add an API key first.")
