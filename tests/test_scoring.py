@@ -77,6 +77,19 @@ def test_recommendation_never_overstates_partial_data():
     assert r["data_required_before_investment_decision"] and all("drivers" in x for x in r["ranking"])
 
 
+def test_what_if():
+    x = run_tool("what_if", {"code": "PWM", "changes": {"load_factor": 90}})
+    assert x["changes_applied"][0]["to"] == 90 and x["score_change"] >= 0
+    assert x["component_change"]["demand_growth"] == 0          # only capacity pressure can move
+    y = run_tool("what_if", {"code": "SFO", "changes": {"nas_delay_min_per_arrival": 3, "avg_taxi_out_min": 15}})
+    assert "AIRSIDE-CONSTRAINED" in y["before"]["flags"] and "AIRSIDE-CONSTRAINED" not in y["after"]["flags"]
+    z = run_tool("what_if", {"code": "PWM", "changes": {"gates": 10}})
+    assert "error" in z
+    # nothing changed -> identical score (deterministic)
+    w = A.what_if("BOS", {})
+    assert w["score_change"] == 0
+
+
 def test_unknown_tool_does_not_crash():
     assert "error" in run_tool("nope", {})
 

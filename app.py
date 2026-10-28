@@ -58,7 +58,7 @@ with st.sidebar:
         for k, v in md.get("vintage", {}).items():
             st.markdown(f"- **{k}:** {v}")
 
-tab_chat, tab_board, tab_method = st.tabs(["💬 Chat", "📊 Leaderboard", "📐 Methodology"])
+tab_chat, tab_board, tab_whatif, tab_method = st.tabs(["💬 Chat", "📊 Leaderboard", "🔧 What-if", "📐 Methodology"])
 
 # ---------------------------------------------------------------- chat
 with tab_chat:
@@ -160,6 +160,47 @@ with tab_board:
     st.markdown("**Data required before an investment decision** (not in public data):")
     for d in res["data_required_before_investment_decision"]:
         st.markdown(f"- {d}")
+
+# ---------------------------------------------------------------- what-if (no LLM)
+with tab_whatif:
+    st.subheader("What-if: change an airport's data and see the new score")
+    st.caption("Same deterministic formula as the ranking. Only the selected airport changes; all other airports "
+               "and the peer group stay as they are.")
+    mt = A.metrics_table()
+    options = mt[mt["pax_enplaned"] >= 250_000].sort_values("pax_enplaned", ascending=False)
+    labels = {c: f"{c} - {options.at[c, 'name']} ({options.at[c, 'state']})" for c in options.index}
+    code = st.selectbox("Airport", list(labels), format_func=lambda c: labels[c],
+                        index=list(labels).index("PWM") if "PWM" in labels else 0)
+    st.markdown("**Change one or more values** (current values are pre-filled):")
+    changes = {}
+    cols = st.columns(2)
+    for i, (k, (label, unit, div)) in enumerate(A.WHAT_IF_METRICS.items()):
+        cur = mt.at[code, k]
+        if pd.isna(cur):
+            cols[i % 2].caption(f"{label}: no data")
+            continue
+        cur_disp = round(float(cur) * div, 2)
+        step = 1000.0 if k == "pax_total" else (0.5 if unit in ("%", "min") else 1.0)
+        val = cols[i % 2].number_input(f"{label} ({unit})", value=float(cur_disp), step=step, key=f"wi_{code}_{k}")
+        if abs(val - cur_disp) > 1e-9:
+            changes[k] = val
+    if not changes:
+        st.info("Change any value above to see the effect.")
+    else:
+        res = A.what_if(code, changes, st.session_state.get("ui_weights"))
+        b, a = res["before"], res["after"]
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Opportunity score", a["opportunity_score"], res["score_change"])
+        c2.metric("National rank (of 105 peers)", a["national_rank_among_peers"],
+                  b["national_rank_among_peers"] - a["national_rank_among_peers"])
+        c3.metric("Potential", a["potential"].replace(" potential", ""),
+                  None if a["potential"] == b["potential"] else f"was {b['potential'].replace(' potential', '')}")
+        rows = [{"": "Before", "Score": b["opportunity_score"], **{k.replace("_", " "): v for k, v in b["components"].items()},
+                 "Confidence": b["confidence"], "Recommendation": b["recommendation"], "Flags": ", ".join(b["flags"])},
+                {"": "After", "Score": a["opportunity_score"], **{k.replace("_", " "): v for k, v in a["components"].items()},
+                 "Confidence": a["confidence"], "Recommendation": a["recommendation"], "Flags": ", ".join(a["flags"])}]
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.caption("Percentiles are capped at 100: improving a metric that is already near the top moves the score little.")
 
 # ---------------------------------------------------------------- methodology
 with tab_method:

@@ -175,10 +175,11 @@ def _normalize_weights(weights: dict | None) -> dict:
     return {k: v / total for k, v in w.items()}
 
 
-def score_table(weights: dict | None = None) -> pd.DataFrame:
+def score_table(weights: dict | None = None, m: pd.DataFrame | None = None) -> pd.DataFrame:
     """Score every airport. Percentiles are computed against the peer universe
-    (airports with >= 1M enplaned passengers) so scores are comparable nationally."""
-    m = metrics_table()
+    (airports with >= 1M enplaned passengers) so scores are comparable nationally.
+    `m` lets the what-if tool score a modified copy of the metrics table."""
+    m = metrics_table() if m is None else m
     w = _normalize_weights(weights)
     peers = m[m["pax_enplaned"] >= PEER_MIN_ENPLANED]
 
@@ -691,3 +692,73 @@ def route_lookup(origin: str, dest: str) -> dict:
     out["notes"] = ["BTS T-100 segment data: passengers on that non-stop flight leg, including connecting "
                     "passengers; not origin-destination demand."]
     return out
+
+
+
+# ---------------------------------------------------------------------------
+# What-if: change one or more input values for one airport and re-score
+# ---------------------------------------------------------------------------
+# metric -> (label, unit, divisor to convert the user's number into the stored value)
+WHAT_IF_METRICS = {
+    "pax_cagr_2023_2025": ("Passenger CAGR 2023-2025", "%", 100),
+    "ytd_pax_growth": ("Passenger growth Jan-Jul 2026 vs 2025", "%", 100),
+    "ytd_seat_growth": ("Seat growth Jan-Jul 2026 vs 2025", "%", 100),
+    "recovery_vs_2019": ("2025 passengers as % of 2019", "%", 100),
+    "load_factor": ("Load factor", "%", 100),
+    "high_lf_route_share": ("Share of seats on routes with load factor >= 85%", "%", 100),
+    "dep_delay15_rate": ("Departures delayed 15+ min", "%", 100),
+    "avg_taxi_out_min": ("Average taxi-out", "min", 1),
+    "peak_hour_ops": ("Busiest-hour operations", "ops/hour", 1),
+    "nas_delay_min_per_arrival": ("NAS delay per arrival", "min", 1),
+    "pax_total": ("Total passengers (enplaned + deplaned)", "passengers", 1),
+}
+
+
+def what_if(code: str, changes: dict, weights: dict | None = None) -> dict:
+    """Re-score ONE airport after changing some of its input values; all other airports stay as they are.
+    `changes` uses natural units: percentages as percent numbers (90 = 90%), minutes, passengers."""
+    code = code.upper()
+    base_m = metrics_table()
+    if code not in base_m.index:
+        return {"error": f"{code} not found"}
+    unknown = [k for k in changes if k not in WHAT_IF_METRICS]
+    if unknown:
+        return {"error": f"Cannot change {unknown}", "changeable_metrics":
+                {k: f"{v[0]} ({v[1]})" for k, v in WHAT_IF_METRICS.items()}}
+    m = base_m.copy()
+    applied = []
+    for k, v in changes.items():
+        label, unit, div = WHAT_IF_METRICS[k]
+        old = m.at[code, k]
+        new = float(v) / div
+        m.at[code, k] = new
+        shown_old = None if pd.isna(old) else round(float(old) * div, 2)
+        applied.append({"metric": k, "label": label, "unit": unit, "from": shown_old, "to": float(v)})
+    # keep derived values consistent
+    if "pax_total" in changes:
+        m.at[code, "log_total_pax"] = np.log10(max(m.at[code, "pax_total"], 1))
+    if {"ytd_pax_growth", "ytd_seat_growth"} & set(changes):
+        m.at[code, "demand_minus_supply_growth"] = m.at[code, "ytd_pax_growth"] - m.at[code, "ytd_seat_growth"]
+
+    before, after = score_table(weights), score_table(weights, m)
+
+    def snap(st: pd.DataFrame, mt: pd.DataFrame) -> dict:
+        peers = mt["pax_enplaned"] >= PEER_MIN_ENPLANED
+        rank = int((st.loc[peers, "opportunity_score"] > st.at[code, "opportunity_score"]).sum()) + 1
+        same_state = mt["state"] == mt.at[code, "state"]
+        st_rank = int((st.loc[same_state & (mt["pax_enplaned"] >= 250_000), "opportunity_score"]
+                       > st.at[code, "opportunity_score"]).sum()) + 1
+        return {"opportunity_score": st.at[code, "opportunity_score"],
+                "components": {c: st.at[code, c] for c in DEFAULT_WEIGHTS},
+                "potential": st.at[code, "potential"], "confidence": st.at[code, "confidence"],
+                "recommendation": st.at[code, "recommendation"],
+                "flags": [f.split(":")[0] for f in st.at[code, "flags"]],
+                "national_rank_among_peers": rank, "rank_in_state": st_rank}
+
+    b, a = snap(before, base_m), snap(after, m)
+    delta = round(a["opportunity_score"] - b["opportunity_score"], 1)
+    return {"airport": code, "name": base_m.at[code, "name"], "changes_applied": applied,
+            "before": b, "after": a, "score_change": delta,
+            "component_change": {c: round(a["components"][c] - b["components"][c], 1) for c in DEFAULT_WEIGHTS},
+            "note": "Only this airport's inputs were changed; all other airports and the peer group stay as they "
+                    "are. Same deterministic formula as the ranking."}

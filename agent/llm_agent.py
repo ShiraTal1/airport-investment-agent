@@ -46,6 +46,10 @@ RULES
     "**Before an investment decision:**" list taken from data_required_before_investment_decision
     (3-5 bullets, most relevant first).
 
+13. "What if" questions about an airport's data ("what if PWM's load factor were 90%?") -> call what_if and show
+    a before/after table (score, potential, recommendation, rank) plus one line on which component moved and why.
+    Mention that percentiles are capped at 100, so improving an already-high metric moves the score little.
+
 ANSWER FORMAT (markdown, concise, analyst-friendly)
 **Answer:** 1-3 sentence direct answer.
 Then a compact table or bullets with the key numbers.

@@ -107,6 +107,19 @@ TOOLS = [
             "origin": {"type": "string"}, "dest": {"type": "string"}}, "required": ["origin", "dest"]},
     },
     {
+        "name": "what_if",
+        "description": "What-if analysis for ONE airport: change one or more of its input values (e.g. load factor "
+                       "90%, growth 5%) and re-score with the same deterministic formula. Returns before vs after: "
+                       "score, components, potential, confidence, recommendation, flags and national rank. "
+                       "Percent metrics are given in percent (90 means 90%); minutes in minutes; pax_total in passengers.",
+        "input_schema": {"type": "object", "properties": {
+            "code": {"type": "string"},
+            "changes": {"type": "object", "description": "metric -> new value",
+                        "properties": {k: {"type": "number", "description": f"{v[0]} ({v[1]})"}
+                                       for k, v in A.WHAT_IF_METRICS.items()}},
+            "weights": WEIGHTS_SCHEMA}, "required": ["code", "changes"]},
+    },
+    {
         "name": "live_faa_status",
         "description": "Live FAA NAS status right now (ground stops, delay programs, closures). Optionally filter "
                        "to airport codes. Use for 'right now/today' questions or to add current context.",
@@ -176,6 +189,9 @@ def run_tool(name: str, args: dict) -> dict:
         elif name == "route_lookup":
             o, d = _resolve(args["origin"], assumptions), _resolve(args["dest"], assumptions)
             out = A.route_lookup(o, d) if o and d else {"error": "airport not found"}
+        elif name == "what_if":
+            code = _resolve(args["code"], assumptions)
+            out = A.what_if(code, args.get("changes") or {}, args.get("weights")) if code else {"error": "airport not found"}
         elif name == "live_faa_status":
             live = data.live_faa_status()
             codes = {c.upper() for c in (args.get("codes") or [])}

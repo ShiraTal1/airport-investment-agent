@@ -33,7 +33,7 @@ more consistent and easier to audit.
         Claude (tool-use loop)  ── plans, resolves names, explains, handles follow-ups
                  │  calls tools (JSON)
                  ▼
-        Deterministic tools (Python)  ── rank / rank_by_metric / profile / compare / route_mix / route_lookup / demand_pressure / live status
+        Deterministic tools (Python)  ── rank / rank_by_metric / profile / compare / what_if / route_mix / route_lookup / demand_pressure / live status
                  │
         ┌────────┴──────────────┐
         ▼                       ▼
@@ -47,7 +47,7 @@ more consistent and easier to audit.
 | Analytics | `agent/analytics.py` | All metrics, percentiles, scores, flags, confidence. **No LLM.** |
 | Tools | `agent/tools.py` | JSON schemas the LLM can call; name resolution; error handling |
 | Agent | `agent/llm_agent.py` | System prompt with guardrails, tool loop, conversation memory |
-| UI | `app.py` | Chat + "How I got this" trace, no-LLM leaderboard, methodology, weight sliders |
+| UI | `app.py` | Chat + "How I got this" trace, no-LLM leaderboard, what-if tab, methodology, weight sliders |
 
 ## 3. Data (all public)
 | Source | Used for |
@@ -119,6 +119,12 @@ passengers per flight (the extra same-size flights airlines would need).
 
 Weights are adjustable (sidebar sliders or by asking the agent, e.g. "weight growth twice as much").
 
+**What-if analysis.** An analyst can change one or more of an airport's input values (e.g. *"what if PWM's
+load factor were 90%?"*) in the chat or in the **What-if** tab. The airport is re-scored with the same formula
+while all other airports and the peer group stay unchanged, and the tool shows before vs after: score,
+components, potential, confidence, recommendation, flags and national rank. Example: PWM's load factor
+82.4% → 90% raises the score only 56.6 → 57.9, because PWM is already at the 91st percentile on that metric.
+
 **From score to recommendation.** The score measures *initial potential*, not proven profitability, so it is
 translated into a decision-oriented label, again with fixed rules:
 
@@ -172,7 +178,7 @@ audit the reasoning.
    score finds capacity *pressure*; a real investment case needs a project-level study.
 4. **Sampled delay data.** Two months (winter + summer) instead of 12 to fit the one-day build; seasonal bias
    is reduced but not removed. The ETL script supports any number of months.
-5. **LLM flexibility vs. control.** The LLM can only act through 10 typed tools, which limits creativity but
+5. **LLM flexibility vs. control.** The LLM can only act through 11 typed tools, which limits creativity but
    prevents hallucinated numbers and keeps answers consistent between runs.
 6. **Simple, explainable weights vs. fitted model.** Weights are expert judgment, not learned (no labeled
    "successful expansion" data). With the firm's past deal outcomes, weights could be calibrated.
