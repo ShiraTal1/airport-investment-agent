@@ -1,5 +1,8 @@
 # Airport Investment Intelligence Agent — Design Note
 
+**Live demo (chat interface):** [airport-agent-shira.streamlit.app](https://airport-agent-shira.streamlit.app)
+· **Source code:** [github.com/ShiraTal1/airport-investment-agent](https://github.com/ShiraTal1/airport-investment-agent)
+
 ## 1. Problem framing
 The firm invests in airport modernization and wants to know **where added terminal/flight capacity will be
 used**. "Most profitable" is not directly measurable with public data (no construction costs, lease terms,
