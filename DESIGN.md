@@ -11,6 +11,19 @@ An airport with strong growth, full planes and congested operations is where new
 fill quickly, which is the main driver of returns on a capacity project. The agent is explicit that its score
 ranks *capacity need*, not project IRR.
 
+**Approach: Define → Measure → Rank → Explain → Validate**
+
+| Step | What it means here |
+|---|---|
+| **Define** | An attractive opportunity = growing demand + capacity already under pressure (Section 4) |
+| **Measure** | Public BTS/FAA data turned into KPIs for demand, activity and capacity pressure (Section 3) |
+| **Rank** | A pre-defined, deterministic formula; same data → same ranking (Section 4) |
+| **Explain** | Why an airport ranks high, which data supports it, and what is still unknown (Section 5) |
+| **Validate** | Automated checks against the source data now; analysts and real financials in a pilot (Section 9) |
+
+The goal is not to build an agent for its own sake, but to make an investment screening decision faster,
+more consistent and easier to audit.
+
 ## 2. Architecture
 
 ```
@@ -75,6 +88,28 @@ passengers per flight (the extra same-size flights airlines would need).
 
 Weights are adjustable (sidebar sliders or by asking the agent, e.g. "weight growth twice as much").
 
+**From score to recommendation.** The score measures *initial potential*, not proven profitability, so it is
+translated into a decision-oriented label, again with fixed rules:
+
+| Potential tier | Rule | Combined with confidence → recommendation |
+|---|---|---|
+| **High potential** | score ≥ 65 | High confidence → *Prioritize for due diligence*; otherwise → *Investigate further (data gaps)* |
+| **Medium potential** | 50-65 | High confidence → *Investigate further*; otherwise → *Monitor* |
+| **Low potential** | < 50 | *Deprioritize* |
+
+A high score on partial data never becomes an automatic "go". Airside-constrained airports also get
+*"check runway/airspace capacity first"*. Each airport carries a deterministic **drivers** line (components
+above the 70th / below the 40th percentile), so the explanation is grounded in the actual metrics:
+e.g. *BOS: strengths scale (86), capacity pressure (78), congestion (76); flagged airside-constrained*.
+
+**Data required before an investment decision** (shown after every ranking; not available publicly):
+
+1. Terminal throughput and utilization (passengers per gate, peak-hour terminal capacity)
+2. Construction and operating cost of the proposed expansion
+3. Expected incremental passenger volume (airline commitments, official FAA forecasts)
+4. Revenue per incremental passenger (aeronautical fees, concessions, parking) and lease terms
+5. Regulatory, environmental and physical constraints (land, runways, airspace, community caps)
+
 ## 5. Where and how AI is used
 | Task | LLM? | Notes |
 |---|---|---|
@@ -119,7 +154,16 @@ audit the reasoning.
 - No regulatory, environmental, community or funding constraints are modeled (the LLM may mention them as
   labeled context).
 
-## 8. With more time / path to production
+## 8. Success metrics for a pilot
+| Metric | What it checks | How it is measured |
+|---|---|---|
+| **Data accuracy** | Do the numbers match the source? | Spot-check tool outputs against BTS/FAA source tables; unit tests on every metric |
+| **Ranking consistency** | Does the same data always produce the same ranking? | Deterministic scoring + automated test (same input → identical ranking) |
+| **Analyst usefulness** | Can analysts understand the ranking and use it for the next step? | Analyst review of answers against the eval rubric; share of shortlisted airports that move to deep-dive; time saved per screening |
+
+These are deliberately stricter than "does the model give a convincing answer".
+
+## 9. With more time / path to production
 - Add FAA Terminal Area Forecast (official 20-year projections) and FAA ACAIS enplanements.
 - Add facility data (gates, terminal sq ft) from airport master plans → passengers per gate as a true
   terminal-capacity metric.

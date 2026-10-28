@@ -145,9 +145,16 @@ with tab_board:
     df = pd.DataFrame(res["ranking"])
     if not df.empty:
         df["flags"] = df["flags"].apply(lambda f: " | ".join(x.split(":")[0] for x in f))
+        first = ["rank", "code", "name", "state", "potential", "confidence", "recommendation",
+                 "opportunity_score", "drivers"]
+        df = df[first + [c for c in df.columns if c not in first]]
         st.dataframe(df, use_container_width=True, hide_index=True)
+    st.caption(res["tier_rules"])
     for n in res["notes"]:
         st.caption(n)
+    st.markdown("**Data required before an investment decision** (not in public data):")
+    for d in res["data_required_before_investment_decision"]:
+        st.markdown(f"- {d}")
 
 # ---------------------------------------------------------------- methodology
 with tab_method:
@@ -157,6 +164,8 @@ with tab_method:
     st.table(pd.DataFrame([meth["weights"]]).T.rename(columns={0: "weight"}))
     st.markdown("**Sub-metrics:**")
     st.table(pd.DataFrame(meth["submetrics"]).T)
+    st.markdown(f"**Potential tiers:** {meth['potential_tiers']}")
+    st.markdown(f"**Recommendation rule:** {meth['recommendation_rule']}")
     st.markdown(f"**Missing data:** {meth['missing_data_rule']}")
     st.markdown("**Key assumptions:**")
     for a in meth["key_assumptions"]:

@@ -66,6 +66,18 @@ METRIC_LABELS = {
 
 LONG_HAUL_DEFAULT_MILES = 3000
 
+# Turning a score into a decision-oriented label (deterministic, documented in DESIGN.md)
+POTENTIAL_TIERS = [(65, "High potential"), (50, "Medium potential"), (0, "Low potential")]
+COMPONENT_LABELS = {"demand_growth": "demand growth", "capacity_pressure": "capacity pressure",
+                    "congestion": "congestion", "scale": "scale"}
+DATA_REQUIRED_BEFORE_INVESTMENT = [
+    "Terminal throughput and utilization (passengers per gate, peak-hour terminal capacity)",
+    "Construction and operating cost of the proposed expansion",
+    "Expected incremental passenger volume (airline commitments, official FAA forecasts)",
+    "Revenue per incremental passenger (aeronautical fees, concessions, parking) and lease terms",
+    "Regulatory, environmental and physical constraints (land, runways, airspace, community caps)",
+]
+
 
 # ---------------------------------------------------------------------------
 # Metric table
@@ -199,7 +211,44 @@ def score_table(weights: dict | None = None) -> pd.DataFrame:
         conf.append("High" if issues == 0 else "Medium" if issues == 1 else "Low")
     out["confidence"] = conf
     out["flags"] = [_flags(m.loc[c], peers) for c in m.index]
+    out["potential"] = [_potential(v) for v in out["opportunity_score"]]
+    out["recommendation"] = [_recommendation(out.at[c, "potential"], out.at[c, "confidence"], out.at[c, "flags"])
+                             for c in m.index]
+    out["drivers"] = [_drivers(out.loc[c]) for c in m.index]
     return out
+
+
+def _potential(score) -> str:
+    if pd.isna(score):
+        return "Not scored"
+    return next(label for cut, label in POTENTIAL_TIERS if score >= cut)
+
+
+def _recommendation(potential: str, confidence: str, flags: list) -> str:
+    """Score + confidence -> next step. A high score on partial data is never an automatic 'go'."""
+    if potential == "High potential":
+        rec = "Prioritize for due diligence" if confidence == "High" else "Investigate further (data gaps)"
+    elif potential == "Medium potential":
+        rec = "Investigate further" if confidence == "High" else "Monitor"
+    else:
+        rec = "Deprioritize"
+    if any(f.startswith("AIRSIDE-CONSTRAINED") for f in flags) and rec != "Deprioritize":
+        rec += "; check runway/airspace capacity first"
+    return rec
+
+
+def _drivers(row: pd.Series) -> str:
+    """Plain-language strengths / weaknesses from component scores (deterministic)."""
+    comps = {c: row[c] for c in DEFAULT_WEIGHTS if pd.notna(row[c])}
+    strong = [f"{COMPONENT_LABELS[c]} ({v:.0f})" for c, v in sorted(comps.items(), key=lambda x: -x[1]) if v >= 70]
+    weak = [f"{COMPONENT_LABELS[c]} ({v:.0f})" for c, v in sorted(comps.items(), key=lambda x: x[1]) if v < 40]
+    missing = [COMPONENT_LABELS[c] for c in DEFAULT_WEIGHTS if pd.isna(row[c])]
+    parts = []
+    parts.append("Strengths: " + (", ".join(strong) if strong else "none above the 70th percentile"))
+    parts.append("Weaknesses: " + (", ".join(weak) if weak else "none below the 40th percentile"))
+    if missing:
+        parts.append("Not scored (no data): " + ", ".join(missing))
+    return ". ".join(parts) + "."
 
 
 def _flags(row: pd.Series, peers: pd.DataFrame) -> list[str]:
@@ -296,9 +345,11 @@ def airport_profile(code: str, weights: dict | None = None) -> dict:
         metrics[f] = entry
     return {
         "code": code, "name": r["name"], "city": r["city"], "state": r["state"], "hub_size": r["hub_size"],
-        "opportunity_score": s["opportunity_score"],
+        "opportunity_score": s["opportunity_score"], "potential": s["potential"],
+        "recommendation": s["recommendation"], "drivers": s["drivers"],
         "component_scores": {c: s[c] for c in DEFAULT_WEIGHTS},
         "confidence": s["confidence"], "flags": s["flags"], "metrics": metrics,
+        "data_required_before_investment_decision": DATA_REQUIRED_BEFORE_INVESTMENT,
     }
 
 
@@ -341,7 +392,8 @@ def rank_airports(region: str | None = None, states: list[str] | None = None,
     for rank, (code, r) in enumerate(sub.iterrows(), 1):
         rows.append({
             "rank": rank, "code": code, "name": r["name"], "state": r["state"], "hub_size": r["hub_size"],
-            "opportunity_score": r["opportunity_score"],
+            "opportunity_score": r["opportunity_score"], "potential": r["potential"],
+            "recommendation": r["recommendation"], "drivers": r["drivers"],
             **{f"score_{c}": r[c] for c in DEFAULT_WEIGHTS},
             "pax_enplaned_2025": int(r["pax_enplaned"]),
             "load_factor_pct": _fmt(r["load_factor"], "pct"),
@@ -352,6 +404,9 @@ def rank_airports(region: str | None = None, states: list[str] | None = None,
             "confidence": r["confidence"], "flags": r["flags"],
         })
     return {"scope": scope_desc, "weights_used": _normalize_weights(weights), "ranking": rows,
+            "tier_rules": "Potential: High >= 65, Medium 50-65, Low < 50. Recommendation combines potential with "
+                          "confidence: only High potential + High confidence -> 'Prioritize for due diligence'.",
+            "data_required_before_investment_decision": DATA_REQUIRED_BEFORE_INVESTMENT,
             "notes": notes + ["Scores are 0-100 percentiles vs. ~all US airports with >= 1M enplaned "
                               "passengers (national peer group), so they are comparable across regions."]}
 
@@ -375,7 +430,8 @@ def compare_airports(codes: list[str], focus: str = "all", weights: dict | None 
             continue
         mets = p["metrics"] if not fields else {k: v for k, v in p["metrics"].items() if k in fields}
         table[p["code"]] = {"name": p["name"], "hub_size": p["hub_size"],
-                            "opportunity_score": p["opportunity_score"],
+                            "opportunity_score": p["opportunity_score"], "potential": p["potential"],
+                            "recommendation": p["recommendation"], "drivers": p["drivers"],
                             "component_scores": p["component_scores"], "confidence": p["confidence"],
                             "flags": p["flags"], "metrics": mets}
     result = {"focus": focus, "airports": table}
@@ -515,6 +571,12 @@ def methodology(weights: dict | None = None) -> dict:
         "weights": _normalize_weights(weights),
         "submetrics": {k: {"component": c, "weight_in_component": w, "label": METRIC_LABELS.get(k, k)}
                        for k, (c, w, _) in SUBMETRICS.items()},
+        "potential_tiers": "High potential >= 65, Medium 50-65, Low < 50",
+        "recommendation_rule": "High potential + High confidence -> Prioritize for due diligence; High potential "
+                               "with Medium/Low confidence -> Investigate further (data gaps); Medium + High "
+                               "confidence -> Investigate further; Medium otherwise -> Monitor; Low -> Deprioritize. "
+                               "Airside-constrained airports get 'check runway/airspace capacity first'.",
+        "data_required_before_investment_decision": DATA_REQUIRED_BEFORE_INVESTMENT,
         "missing_data_rule": "Within a component, sub-metric weights are re-normalized over available data. "
                              "A component with no data is set to a neutral 50. Confidence is lowered either way.",
         "data_sources": md.get("sources", []),

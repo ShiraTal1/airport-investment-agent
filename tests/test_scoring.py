@@ -67,6 +67,16 @@ def test_unmet_flights_and_new_tools():
     assert "error" in run_tool("rank_by_metric", {"metric": "nope"})
 
 
+def test_recommendation_never_overstates_partial_data():
+    s = A.score_table()
+    hi = s[s["recommendation"].str.startswith("Prioritize")]
+    assert (hi["potential"] == "High potential").all() and (hi["confidence"] == "High").all()
+    assert A._recommendation("High potential", "Low", []) == "Investigate further (data gaps)"
+    assert A._recommendation("Low potential", "High", ["AIRSIDE-CONSTRAINED: x"]) == "Deprioritize"
+    r = A.rank_airports(region="New England")
+    assert r["data_required_before_investment_decision"] and all("drivers" in x for x in r["ranking"])
+
+
 def test_unknown_tool_does_not_crash():
     assert "error" in run_tool("nope", {})
 
