@@ -77,31 +77,6 @@ def test_recommendation_never_overstates_partial_data():
     assert r["data_required_before_investment_decision"] and all("drivers" in x for x in r["ranking"])
 
 
-def test_capex_feasibility_ranges_and_labels():
-    x = run_tool("capex_feasibility", {"code": "PWM"})
-    c = x["capex_estimate_usd_millions"]
-    assert 0 < c["low"] < c["central"] < c["high"]
-    p = x["simple_payback_years_at_full_use"]
-    assert p["optimistic (low cost, high margin)"] < p["central"] < p["pessimistic (high cost, low margin)"]
-    assert x["overall_confidence"].startswith("Low")
-    assert any("not final" in d["latest_status"].lower() for d in x["estimate_drift_in_benchmarks"])
-    assert "Not the total cost" in x["federal_aip_context"]["what_this_is"]
-    y = run_tool("capex_feasibility", {"code": "PWM", "added_annual_pax": 1_000_000})
-    assert y["scenario"]["added_annual_passengers"] == 1_000_000
-
-
-def test_project_report_structure():
-    x = run_tool("project_report", {"code": "PWM", "project": "terminal_expansion"})
-    for k in ("executive_summary", "financial_case_base", "key_assumptions", "scenarios", "data_quality",
-              "validation_required"):
-        assert k in x
-    sc = x["scenarios"]
-    assert sc["conservative"]["npv_usd_m"] < sc["base"]["npv_usd_m"] < sc["optimistic"]["npv_usd_m"]
-    y = run_tool("project_report", {"code": "SFO", "project": "runway_airfield"})
-    assert y["financial_case_base"] is None and "not estimable" in y["executive_summary"]["initial_conclusion"]
-    assert A._irr([-100, 60, 60]) > 0.1
-
-
 def test_unknown_tool_does_not_crash():
     assert "error" in run_tool("nope", {})
 

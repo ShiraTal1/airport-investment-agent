@@ -41,21 +41,6 @@ def airport_names() -> pd.DataFrame:
 
 
 @lru_cache(maxsize=1)
-def aip_grants() -> pd.DataFrame:
-    return pd.read_csv(DATA_DIR / "aip_grants_fy2021_2025.csv", keep_default_na=False)
-
-
-@lru_cache(maxsize=1)
-def cost_benchmarks() -> pd.DataFrame:
-    return pd.read_csv(DATA_DIR / "terminal_cost_benchmarks.csv")
-
-
-@lru_cache(maxsize=1)
-def finance_benchmarks() -> dict:
-    return json.loads((DATA_DIR / "finance_benchmarks.json").read_text())
-
-
-@lru_cache(maxsize=1)
 def metadata() -> dict:
     path = DATA_DIR / "metadata.json"
     return json.loads(path.read_text()) if path.exists() else {}

@@ -16,17 +16,11 @@ from agent.llm_agent import AirportAgent
 st.set_page_config(page_title="Airport Investment Intelligence", page_icon="✈️", layout="wide")
 
 EXAMPLES = [
-    "Which US airports are the most promising terminal investment opportunities, and what would it cost?",
     "Which airports in New England are strong candidates for terminal expansion?",
     "Compare LA and Santa Ana airport congestion levels.",
     "What is the percentage of long haul flights out of Anchorage airport?",
     "What is the unmet flight demand in SFO airport and why?",
 ]
-
-
-def md_safe(text: str) -> str:
-    """Streamlit renders $...$ as LaTeX math; escape dollar signs so amounts like $1.2B display as text."""
-    return (text or "").replace("\\$", "$").replace("$", "\\$")
 
 
 def get_secret(name: str) -> str | None:
@@ -41,9 +35,8 @@ def get_secret(name: str) -> str | None:
 # ---------------------------------------------------------------- sidebar
 with st.sidebar:
     st.header("✈️ Airport Investment Agent")
-    st.caption("Helps analysts identify promising US airport investment opportunities: where demand is "
-               "outgrowing capacity, what an expansion might cost and earn, and what to check next. Public "
-               "BTS/FAA data, a deterministic scoring model, and an LLM that explains the results.")
+    st.caption("Finds US airports where demand is outgrowing capacity, using public BTS/FAA data, "
+               "a deterministic scoring model, and an LLM that explains the results.")
     api_key = get_secret("ANTHROPIC_API_KEY") or st.text_input("Anthropic API key", type="password")
 
     st.subheader("Score weights")
@@ -101,7 +94,7 @@ with tab_chat:
 
     for msg in st.session_state["history"]:
         with st.chat_message(msg["role"]):
-            st.markdown(md_safe(msg["content"]))
+            st.markdown(msg["content"])
             if msg.get("tool_calls"):
                 with st.expander(f"🔎 How I got this ({len(msg['tool_calls'])} tool calls)"):
                     for tc in msg["tool_calls"]:
@@ -115,7 +108,7 @@ with tab_chat:
         agent = st.session_state["agent"]
         st.session_state["history"].append({"role": "user", "content": prompt})
         with st.chat_message("user"):
-            st.markdown(md_safe(prompt))
+            st.markdown(prompt)
         # Pass slider weights as context if the user changed them
         ui_w = st.session_state.get("ui_weights", {})
         weight_note = ""
@@ -128,7 +121,7 @@ with tab_chat:
                     answer, calls = turn.text, turn.tool_calls
                 except Exception as exc:
                     answer, calls = f"⚠️ Error calling the model: {exc}", []
-            st.markdown(md_safe(answer))
+            st.markdown(answer)
             if calls:
                 with st.expander(f"🔎 How I got this ({len(calls)} tool calls)"):
                     for tc in calls:
@@ -173,7 +166,6 @@ with tab_method:
     st.table(pd.DataFrame(meth["submetrics"]).T)
     st.markdown(f"**Potential tiers:** {meth['potential_tiers']}")
     st.markdown(f"**Recommendation rule:** {meth['recommendation_rule']}")
-    st.markdown(f"**Renovation cost and return (screening level):** {meth['feasibility_method']}")
     st.markdown(f"**Missing data:** {meth['missing_data_rule']}")
     st.markdown("**Key assumptions:**")
     for a in meth["key_assumptions"]:
