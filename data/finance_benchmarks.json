@@ -1,8 +1,0 @@
-{
-  "source": "FAA CATS (Form 5100-127), FY2025, 417 airports, as summarized by DWU Consulting (extracted 2026-07-21): https://dwuconsulting.com/dwu-ai/us-airport-industry-overview",
-  "fy2025_total_operating_revenue_usd": 34.5e9,
-  "fy2025_cash_operating_expense_usd": 21.8e9,
-  "large_hub_share_of_operating_revenue": 0.69,
-  "system_operating_margin_before_depreciation": 0.37,
-  "note": "Revenue per enplanement by tier is derived here: tier revenue (FY2025 CATS) / tier enplanements (CY2025 BTS T-100). Fiscal vs calendar year mismatch; tiers other than large hubs are pooled because CATS tier dollar splits were not available."
-}
